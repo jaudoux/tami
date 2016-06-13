@@ -21,6 +21,16 @@
 use strict;
 use warnings;
 use utf8;
+use Getopt::Long;
+use REST::Client;
+use Data::Dumper;
+
+#my $inputFASTA;
+#my $inputFASTQ;
+#my $k;
+
+#GetOptions ('inputFASTA' => \$inputFASTA, 'inputFASTQ' => \$all, 'k' => \$k);
+#Il faudra rendre l'utilisation d'un fichier facultative.
 
 open(my $inputFASTA, '<', $ARGV[0]) or die("open $!");
 open(my $inputFASTQ, '<', $ARGV[1]) or die("open $!");
@@ -29,10 +39,10 @@ my $k=$ARGV[2];
 
 my $Fasta;
 my $kmer;
-my $nbrKmer;
+my $nbKmer;
 my $name; #Permet de stocker le nom du read
 my $position=0; #Permet de stocker la position du match...
-my $nameChromosome;
+my $chromosomeName;
 
 print STDERR ("\n\nStockage du Fasta...\n");
 
@@ -46,7 +56,7 @@ while (<$inputFASTA>) #Lecture du fichier Fasta et Stockage de son contenu dans 
 	else
 	{
 		chomp($_);
-		$nameChromosome = $_;
+		$chromosomeName = $_;
 	}
 }
 close($inputFASTA);
@@ -112,19 +122,18 @@ print STDERR ("Ecriture...\n");
 
 print $outputVCF "Chrom\tPos\tID\tRef\tAlt\tInfo\n";
 
-my $nucReference;
+my $refNuc;
 my $DP; #Tout
-my $AF; #Ref/Muté
+my $AF; #Ref/somme (une moyenne quoi...)
 
-#foreach my $clee (sort keys %listingKmer)
-foreach my $clee (sort { %listingKmer{$a} <=> $listingKmer{$b} } keys %listingKmer)
+foreach my $key ( sort {$listingKmer{$a}->{'position'} <=> $listingKmer{$b}->{'position'}} grep { defined $listingKmer{$_}{'position'}} keys %listingKmer)
 {
-		if ($listingKmer{$clee}{'count'}>0 && defined($listingKmer{$clee}{'ref_kmer'}))
+		if ($listingKmer{$key}{'count'}>0 && defined($listingKmer{$key}{'ref_kmer'})) #On peut rajouter cette condition dans le grep. 
 		{
-			$nucReference = substr($listingKmer{$clee}{'ref_kmer'}, $k/2, 1);
-			$DP = $listingKmer{$listingKmer{$clee}{'ref_kmer'}}{'count'}+$listingKmer{$clee}{'count'};
-			$AF = $listingKmer{$listingKmer{$clee}{'ref_kmer'}}{'count'}/$DP;
-			print $outputVCF "$nameChromosome\t$listingKmer{$clee}{'position'}\t$clee\t$nucReference\t$listingKmer{$clee}{'mut'}\tDP=$DP;AF=$AF\n";
+			$refNuc = substr($listingKmer{$key}{'ref_kmer'}, $k/2, 1);
+			$DP = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'count'}+$listingKmer{$key}{'count'};
+			$AF = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'count'}/$DP;
+			print $outputVCF "$chromosomeName\t$listingKmer{$key}{'position'}\t$key\t$refNuc\t$listingKmer{$key}{'mut'}\tDP=$DP;AF=$AF\n";
 		}
 }
 
@@ -137,7 +146,7 @@ print STDERR "\n\n --- Fini --- \n\n";
 sub mutation
 {
 	my ($sequence, $position)=@_;
-	my $tailleSeq = length($sequence);
+	my $seqLength = length($sequence);
 	my @nucleotides = ('a', 'g', 'c', 't');
 	my $nucleotideRand=$nucleotides[rand(@nucleotides)];
 	substr($sequence, $position, 1, $nucleotideRand);
