@@ -1,9 +1,9 @@
 #!/usr/bin/env perl
 #===============================================================================
 #
-#         FILE: FastaMere.pl
+#         FILE: compteKmer.pl
 #
-#        USAGE: ./FastaMere.pl  
+#        USAGE: ./compteKmer.pl  
 #
 #  DESCRIPTION: 
 #
