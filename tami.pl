@@ -35,15 +35,15 @@ Targeted Mutation Identification : TaMi
 
 =head1 SYNOPSIS
 
-./TaMi.pl Gene FastQ KmerLength (for the moment)
+./TaMi.pl -g geneName -k Kmer_Length -q FASTQ_File
 
 =head1 DESCRIPTION
 
-ToDo
+TaMi can get a DNA Sequence from database 'ensembl' or from a fasta file, and giving a read length and a FASTQ file, will generate a VCF file with every SNPs that have been found.
 
 =head1 VERSION
 
-0.0
+0.01
 
 =head1 AUTHORS
 
@@ -51,21 +51,56 @@ J.Audoux / A.Soriano
 
 =head1 OPTIONS
 
-  -o,--output-dir         Output directory (DEFAULT: 'simCT_simulation') 
-  -k                      Kmer Length
+  -man                    Print the manual
+  -help                   Print the... help !
+  -v,--verbose            Verbose...
+  -o,--output-dir         Output directory 
+  -k,--kmer_length        Kmer Length
   -g,--Gene               Name of the Gene to look for in the database (hum...)
-  -F,--FASTA              Use a FASTA file as input instead of a gene name 
-  -Q,--FASTQ              FASTQ File to work with
+  -f,--FASTA              Use a FASTA file as input instead of a gene name 
+  -q,--FASTQ              FASTQ File to work with
   -s,--Species            The species you are working with
 
 =cut
 
+my ($help, $man, $verbose);
+my $output_dir;
+my $geneName='';
+my $inputFASTA='';
+my $refFASTQ='';
+my $k=22;
+my $specie='human';
 
-my $geneName=$ARGV[0];
+GetOptions( "v|verbose"           => \$verbose,
+            "man"                 => \$man,
+            "help"                => \$help,
+            "o|output-dir=s"      => \$output_dir,
+            "k|kmer_length=i"     => \$k,
+            "g|gene_name=s"       => \$geneName,
+            "f|FASTA_file=s"      => \$inputFASTA,
+            "q|FASTQ_file=s"      => \$refFASTQ,
+            "s|specie=s"          => \$specie,
+        ) or pod2usage (-verbose => 1);
 
-#GetOptions ('inputFASTA' => \$inputFASTA, 'inputFASTQ' => \$all, 'k' => \$k);
-#Il faudra rendre l'utilisation d'un fichier facultative.
-#my $organism = $ARGV[1]; Different organism from human can also be used.
+#Now some test to check if everything's okay.
+        #No FASTQ
+        #No gene and no FASTA file, or both of them.
+ 
+pod2usage(-verbose => 1)  if ($help);
+pod2usage(-verbose => 2)  if ($man);
+
+pod2usage(
+    -message => "Mandatory argument 'FASTQ_file' is missing",
+    -verbose => 1,
+) unless defined $refFASTQ;
+
+pod2usage(
+    -message => "Only one input genome can be specified",
+    -verbose => 1,
+) unless ($geneName xor $inputFASTA);
+
+open(my $inputFASTQ, '<', $refFASTQ) or die("open $!");
+open(my $outputVCF, '>', 'Output.vcf') or die ("open $!");
 
 my $client = REST::Client->new();
 
@@ -135,12 +170,9 @@ print STDERR "\nThe gene $geneName is located on chromosome $chromosome between 
 
 $client->GET("https://rest.ensembl.org/sequence/region/human/$chromosome:$limInf..$limSup:1?content-type=text/plain");
 
-my $inputFASTA = $client->responseContent();
+#Now the genome will be analysed.
 
-open(my $inputFASTQ, '<', $ARGV[1]) or die("open $!");
-open(my $outputVCF, '>', 'Output.vcf') or die ("open $!");
-my $k=$ARGV[2];
-
+$inputFASTA = $client->responseContent();
 my $kmer;
 my $nbKmer;
 my $name; #Permet de stocker le nom du read
@@ -195,6 +227,9 @@ while (<$inputFASTQ>) #On lit le FastQ
 			}
 		}
 	}
+    if ($nbRead%25000==0){
+        print STDERR "$nbRead reads parsed...\n"
+    }
 }
 
 print STDERR "$nbRead reads were present.\n\n";
@@ -216,8 +251,8 @@ foreach my $key ( sort {$listingKmer{$a}->{'position'} <=> $listingKmer{$b}->{'p
 		if ($listingKmer{$key}{'count'}>0 && defined($listingKmer{$key}{'ref_kmer'})) #On peut rajouter cette condition dans le grep. 
 		{
 			$refNuc = substr($listingKmer{$key}{'ref_kmer'}, $k/2, 1);
-			$DP = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'count'}+$listingKmer{$key}{'count'};
-			$AF = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'count'}/$DP;
+			$DP = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'count'}+$listingKmer{$key}{'count'}; #Sum of the the reference and alternative kmer count
+  			$AF = ($listingKmer{$key}{'count'})/$DP;
 			print $outputVCF "$chromosome\t$listingKmer{$key}{'position'}\t$key\t$refNuc\t$listingKmer{$key}{'mut'}\tDP=$DP;AF=$AF\n";
 		}
 }
