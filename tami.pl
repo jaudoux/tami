@@ -60,6 +60,7 @@ J.Audoux / A.Soriano
   -f,--FASTA              Use a FASTA file as input instead of a gene name 
   -q,--FASTQ              FASTQ File to work with
   -s,--Species            The species you are working with
+  -r,--Reverse_complement Specified if bla (default : false)
 
 =cut
 
@@ -70,6 +71,7 @@ my $inputFASTA='';
 my $refFASTQ='';
 my $k=22;
 my $specie='human';
+my $RC = 0;
 
 GetOptions( "v|verbose"           => \$verbose,
             "man"                 => \$man,
@@ -80,6 +82,7 @@ GetOptions( "v|verbose"           => \$verbose,
             "f|FASTA_file=s"      => \$inputFASTA,
             "q|FASTQ_file=s"      => \$refFASTQ,
             "s|specie=s"          => \$specie,
+            "r|reverse_c=i"       => \$RC,
         ) or pod2usage (-verbose => 1);
 
 #Now some test to check if everything's okay.
@@ -104,7 +107,7 @@ open(my $outputVCF, '>', 'Output.vcf') or die ("open $!");
 
 my $client = REST::Client->new();
 
-$client->GET("https://rest.ensembl.org/xrefs/symbol/homo_sapiens/$geneName?content-type=application/json");
+$client->GET("http://rest.ensembl.org/xrefs/symbol/homo_sapiens/$geneName?content-type=application/json");
 
 #print STDERR Dumper($client->responseContent());
 
@@ -117,7 +120,7 @@ my $nbRefs=0;
 
 #This portion of code is not very nice... but it works !
 foreach my $ref (@{$xrefs}) {
-    $client->GET("https://rest.ensembl.org/lookup/id/".$ref->{'id'}."?content-type=application/json");
+    $client->GET("http://rest.ensembl.org/lookup/id/".$ref->{'id'}."?content-type=application/json");
 	my $gene = decode_json $client->responseContent();
     #If only one key is present, we can store the information. If not, two different cases. The first case is when more than one entry are present, but that only one is usefull. The second case is when two different entry may be usefull for the user.
     if (scalar keys $xrefs ==1){ #Easyest case, we store the values and then exit the loop
@@ -152,7 +155,7 @@ if ($nbRefs>1) #Only usefull if two or more usefull entrys are present. In this 
     chomp($name);
     foreach my $ref2 (@{$xrefs})
     {    
-        $client->GET("https://rest.ensembl.org/lookup/id/".$ref2->{'id'}."?content-type=application/json");
+        $client->GET("http://rest.ensembl.org/lookup/id/".$ref2->{'id'}."?content-type=application/json");
         my $gene2 = decode_json $client->responseContent();
 	    if ((index($gene2->{'source'}, 'havana') != -1) && ($gene2->{'object_type'} eq 'Gene') )
         {
@@ -168,7 +171,7 @@ if ($nbRefs>1) #Only usefull if two or more usefull entrys are present. In this 
 
 print STDERR "\nThe gene $geneName is located on chromosome $chromosome between position $limInf and $limSup.\n\n";
 
-$client->GET("https://rest.ensembl.org/sequence/region/human/$chromosome:$limInf..$limSup:1?content-type=text/plain");
+$client->GET("http://rest.ensembl.org/sequence/region/human/$chromosome:$limInf..$limSup:1?content-type=text/plain");
 
 #Now the genome will be analysed.
 
@@ -187,16 +190,25 @@ print STDERR ("Building the Kmer list...\n");
 for (my $i=0;$i<length($inputFASTA)-$k+1;$i++) #Construction de tous les kmer mutés au centre.
 {
 	my $ref_kmer = substr ($inputFASTA, $i, $k);
+    if ($ref_kmer gt reverseComplement($ref_kmer)) # Oo #
+    {
+        $ref_kmer = reverseComplement($ref_kmer);
+    }
+
 	my $refNuc= substr($ref_kmer, (length($ref_kmer)/2), 1);
 	foreach my $nuc ("A", "G", "T", "C")
 	{
 		if($nuc ne $refNuc)
 	   	{
 			$kmer = mutationSimple($ref_kmer,(length($ref_kmer)/2) , $nuc);
+            if ($kmer gt reverseComplement($kmer))
+            {
+                $kmer = reverseComplement($kmer);
+            }
 			$listingKmer{$kmer}{'count'}=0; #Construire ici les Kmer mutés au centre. Technique de rat d'égout où on code tout en dur !
 			$listingKmer{$kmer}{'ref_kmer'}=$ref_kmer;
 			$listingKmer{$kmer}{'mut'}=$nuc;
-			$listingKmer{$kmer}{'position'}=int($i+($k/2)+1+$limInf); #Idiot ?
+			$listingKmer{$kmer}{'position'}=int($i+($k/2)+$limInf); #Idiot ?
 		}
 		else
 		{
@@ -204,6 +216,7 @@ for (my $i=0;$i<length($inputFASTA)-$k+1;$i++) #Construction de tous les kmer mu
 		}
 	}
 }
+
 
 my $nbRead=0;
 
@@ -221,14 +234,22 @@ while (<$inputFASTQ>) #On lit le FastQ
 		for (my $i=0;$i<length($ligneQ);$i++)
 		{
 			$kmerRead = substr($ligneQ, $i, $k);
+            if ($kmerRead gt reverseComplement($kmerRead))
+            {
+                $kmerRead = reverseComplement($kmerRead);
+            }
 			if (defined($listingKmer{$kmerRead}))
 			{
 				$listingKmer{$kmerRead}{'count'}++;
+                if (defined($listingKmer{$kmerRead}{'ref_kmer'}))
+                {
+                    $listingKmer{$listingKmer{$kmerRead}{'ref_kmer'}}{'count'}++;
+                }
 			}
 		}
-	}
-    if ($nbRead%25000==0){
-        print STDERR "$nbRead reads parsed...\n"
+        if ($nbRead%100000==0){
+        print STDERR "*";
+	    }
     }
 }
 
@@ -258,6 +279,7 @@ foreach my $key ( sort {$listingKmer{$a}->{'position'} <=> $listingKmer{$b}->{'p
 }
 
 print STDERR "\n\n --- END --- \n\n";
+
 
 ####################################################################
 ###########################***FONCTIONS***##########################
@@ -305,4 +327,13 @@ sub importFastaFile #UNTESTED ! Take the name of a FASTA file as input, and outp
 	    }
     }
     return $Fasta;
+}
+
+sub reverseComplement
+{
+    my ($seq) = @_;
+    chomp($seq);
+    $seq =~ tr /atcgATCG/tagcTAGC/;
+    $seq = reverse($seq);
+    return $seq 
 }
