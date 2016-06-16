@@ -26,6 +26,7 @@ use REST::Client;
 use Data::Dumper;
 use JSON;
 use Pod::Usage;
+use Math::Round
 
 =pod
 
@@ -55,12 +56,13 @@ J.Audoux / A.Soriano
   -help                   Print the... help !
   -v,--verbose            Verbose...
   -o,--output-dir         Output directory 
-  -k,--kmer_length        Kmer Length
+  -k,--kmer_length        Kmer Length (def : 30)
   -g,--Gene               Name of the Gene to look for in the database (hum...)
   -f,--FASTA              Use a FASTA file as input instead of a gene name 
   -q,--FASTQ              FASTQ File to work with
-  -s,--Species            The species you are working with
-  -r,--Reverse_complement Specified if bla (default : false)
+  -s,--Species            The species you are working with (def : human)
+  -r,--Reverse_complement Specified if tami must use the reverse complement of the specified sequence. Set to 0 to disable. (def : true)
+  -c,--cut                Set the AF above which a mutation will be selected. All mutations with a AF value lower than this one will not be selected : value must be between 0 and 1, where 0 means disabled. (def 0.01)
 
 =cut
 
@@ -69,9 +71,10 @@ my $output_dir;
 my $geneName='';
 my $inputFASTA='';
 my $refFASTQ='';
-my $k=22;
+my $k=30;
 my $specie='human';
-my $RC = 0;
+my $RC = 1;
+my $cut = 0.01;
 
 GetOptions( "v|verbose"           => \$verbose,
             "man"                 => \$man,
@@ -83,6 +86,7 @@ GetOptions( "v|verbose"           => \$verbose,
             "q|FASTQ_file=s"      => \$refFASTQ,
             "s|specie=s"          => \$specie,
             "r|reverse_c=i"       => \$RC,
+            "c|cut=f"               => \$cut,
         ) or pod2usage (-verbose => 1);
 
 #Now some test to check if everything's okay.
@@ -180,6 +184,7 @@ my $kmer;
 my $nbKmer;
 my $name; #Permet de stocker le nom du read
 my $position=0; #Permet de stocker la position du match...
+my $kDiv2=$k/2;
 
 #Construction d'une Hash devant stocké tous les Kmer non mutés. Il faudra gérer les bords aussi.
 
@@ -190,33 +195,66 @@ print STDERR ("Building the Kmer list...\n");
 for (my $i=0;$i<length($inputFASTA)-$k+1;$i++) #Construction de tous les kmer mutés au centre.
 {
 	my $ref_kmer = substr ($inputFASTA, $i, $k);
-    if ($ref_kmer gt reverseComplement($ref_kmer)) # Oo #
-    {
-        $ref_kmer = reverseComplement($ref_kmer);
-    }
+	my $refNuc= substr($ref_kmer, $kDiv2, 1);
 
-	my $refNuc= substr($ref_kmer, (length($ref_kmer)/2), 1);
-	foreach my $nuc ("A", "G", "T", "C")
+
+    if ($RC != 0) #Make the RC of the RefKMer
+    {
+        my  $reverseKmer = reverseComplement($ref_kmer);
+        if ($ref_kmer gt $reverseKmer)
+        {
+            $ref_kmer = $reverseKmer;
+        }
+    }
+    #PAS AU BON ENDROIT HEIN
+#    if (exists($listingKmer{$kmer})) #Delete any Kmer than may be present more than one time
+    #   {
+    #    foreach my $nuc ("A", "G", "T", "C")    
+    #   {
+    #       delete($listingKmer{mutationSimple($ref_kmer, $kDiv2, $nuc)});
+    #   }
+    #   }
+
+	foreach my $nuc ("A", "G", "T", "C")#I wonder if making two distinct loop with and without the reverse won't be faster... in the code above the $RC is tested each time...
 	{
 		if($nuc ne $refNuc)
 	   	{
-			$kmer = mutationSimple($ref_kmer,(length($ref_kmer)/2) , $nuc);
-            if ($kmer gt reverseComplement($kmer))
+			$kmer = mutationSimple($ref_kmer,$kDiv2 , $nuc);
+            if ($RC)#Reverse complement.
             {
-                $kmer = reverseComplement($kmer);
+                my  $reverseKmer = reverseComplement($kmer);
+                if ($kmer gt $reverseKmer)
+                {
+                    $kmer = $reverseKmer;
+                }
             }
-			$listingKmer{$kmer}{'count'}=0; #Construire ici les Kmer mutés au centre. Technique de rat d'égout où on code tout en dur !
+            if (exists($listingKmer{$kmer})) #Delete any Kmer than may be present more than one time
+            {
+                foreach my $nuc ("A", "G", "T", "C")    
+                {
+                    delete($listingKmer{mutationSimple($ref_kmer, $kDiv2, $nuc)});
+                }
+                last;
+            }
+			$listingKmer{$kmer}{'count'}=0;
 			$listingKmer{$kmer}{'ref_kmer'}=$ref_kmer;
 			$listingKmer{$kmer}{'mut'}=$nuc;
-			$listingKmer{$kmer}{'position'}=int($i+($k/2)+$limInf); #Idiot ?
+			$listingKmer{$kmer}{'position'}=int($i+$kDiv2+$limInf); #Idiot ?
 		}
-		else
+		else #Will store the total number of kmer mapped derived from the ref.
 		{
 			$listingKmer{$ref_kmer}{'count'}=0;
+            if (exists($listingKmer{$kmer})) #Delete any Kmer than may be present more than one time
+            {
+                foreach my $nuc ("A", "G", "T", "C")    
+                {
+                    delete($listingKmer{mutationSimple($ref_kmer, $kDiv2, $nuc)});
+                }
+                last;
+            }
 		}
 	}
 }
-
 
 my $nbRead=0;
 
@@ -224,31 +262,39 @@ print STDERR ("Reading FASTQ file...\n");
 
 my $kmerRead;
 
-while (<$inputFASTQ>) #On lit le FastQ
+while (<$inputFASTQ>) #Reading the fastQ file.
 {
 	my $ligneQ = $_;
-	if ($.%4 == 2) #Selection des reads
+	if ($.%4 == 2) #Read selection.
 	{
 		$nbRead++;
 		chomp($ligneQ);
-		for (my $i=0;$i<length($ligneQ);$i++)
+		for (my $i=0;$i<=length($ligneQ)-$k;$i++) #Build the Kmer of the selected read.
 		{
 			$kmerRead = substr($ligneQ, $i, $k);
-            if ($kmerRead gt reverseComplement($kmerRead))
+            if ($RC!=0)#Reverse Complement
             {
-                $kmerRead = reverseComplement($kmerRead);
-            }
-			if (defined($listingKmer{$kmerRead}))
-			{
-				$listingKmer{$kmerRead}{'count'}++;
-                if (defined($listingKmer{$kmerRead}{'ref_kmer'}))
+                my $kmerReverseRead = reverseComplement($kmerRead);
+                if ($kmerRead gt $kmerReverseRead)
                 {
+                    print "\t";
+                    $kmerRead = $kmerReverseRead;
+                }
+            }
+			if (defined($listingKmer{$kmerRead})) #If this part of the read can be found somwhere in the hash.
+			{
+
+				$listingKmer{$kmerRead}{'count'}++;
+                # print Dumper($listingKmer{$kmerRead}{'count'});
+                if (defined($listingKmer{$kmerRead}{'ref_kmer'})) #If the Kmer has a reference kmer or a position, it means that it's a mutated one. So we will increment the ref in order to have an access to the DP.
+                {
+#                    print "$listingKmer{$listingKmer{$kmerRead}{'ref_kmer'}}{'count'}\n";
                     $listingKmer{$listingKmer{$kmerRead}{'ref_kmer'}}{'count'}++;
                 }
 			}
 		}
         if ($nbRead%100000==0){
-        print STDERR "*";
+            print STDERR "*";
 	    }
     }
 }
@@ -271,10 +317,13 @@ foreach my $key ( sort {$listingKmer{$a}->{'position'} <=> $listingKmer{$b}->{'p
 {
 		if ($listingKmer{$key}{'count'}>0 && defined($listingKmer{$key}{'ref_kmer'})) #On peut rajouter cette condition dans le grep. 
 		{
-			$refNuc = substr($listingKmer{$key}{'ref_kmer'}, $k/2, 1);
-			$DP = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'count'}+$listingKmer{$key}{'count'}; #Sum of the the reference and alternative kmer count
-  			$AF = ($listingKmer{$key}{'count'})/$DP;
-			print $outputVCF "$chromosome\t$listingKmer{$key}{'position'}\t$key\t$refNuc\t$listingKmer{$key}{'mut'}\tDP=$DP;AF=$AF\n";
+			$refNuc = substr($listingKmer{$key}{'ref_kmer'}, $kDiv2, 1);
+            $DP = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'count'};#$listingKmer{$key}{'ref_kmer'}{'count'}
+  			$AF = ($listingKmer{$key}{'count'})/($DP);
+            if ($cut <= $AF)
+            {
+			    print $outputVCF "$chromosome\t$listingKmer{$key}{'position'}\t$key\t$refNuc\t$listingKmer{$key}{'mut'}\tDP=$DP;AF=$AF\n";
+            }
 		}
 }
 
@@ -329,7 +378,7 @@ sub importFastaFile #UNTESTED ! Take the name of a FASTA file as input, and outp
     return $Fasta;
 }
 
-sub reverseComplement
+sub reverseComplement #Take a DNA sequence as input and output his reverse complement.
 {
     my ($seq) = @_;
     chomp($seq);
