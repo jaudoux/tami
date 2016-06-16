@@ -26,7 +26,6 @@ use REST::Client;
 use Data::Dumper;
 use JSON;
 use Pod::Usage;
-use Math::Round
 
 =pod
 
@@ -63,6 +62,7 @@ J.Audoux / A.Soriano
   -s,--Species            The species you are working with (def : human)
   -r,--Reverse_complement Specified if tami must use the reverse complement of the specified sequence. Set to 0 to disable. (def : true)
   -c,--cut                Set the AF above which a mutation will be selected. All mutations with a AF value lower than this one will not be selected : value must be between 0 and 1, where 0 means disabled. (def 0.01)
+  -n,--nbCut              Specified the number of map above which a kmer will be chosen (def : 2)
 
 =cut
 
@@ -75,6 +75,7 @@ my $k=30;
 my $specie='human';
 my $RC = 1;
 my $cut = 0.01;
+my $nbCut = 2;
 
 GetOptions( "v|verbose"           => \$verbose,
             "man"                 => \$man,
@@ -86,7 +87,8 @@ GetOptions( "v|verbose"           => \$verbose,
             "q|FASTQ_file=s"      => \$refFASTQ,
             "s|specie=s"          => \$specie,
             "r|reverse_c=i"       => \$RC,
-            "c|cut=f"               => \$cut,
+            "c|cut=f"             => \$cut,
+            "n|nbCut=i"           => \$nbCut,
         ) or pod2usage (-verbose => 1);
 
 #Now some test to check if everything's okay.
@@ -319,8 +321,8 @@ foreach my $key ( sort {$listingKmer{$a}->{'position'} <=> $listingKmer{$b}->{'p
 		{
 			$refNuc = substr($listingKmer{$key}{'ref_kmer'}, $kDiv2, 1);
             $DP = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'count'};#$listingKmer{$key}{'ref_kmer'}{'count'}
-  			$AF = ($listingKmer{$key}{'count'})/($DP);
-            if ($cut <= $AF)
+  			$AF = (($listingKmer{$key}{'count'})/($DP));
+            if ($cut <= $AF && $listingKmer{$key}{'count'}>=$nbCut)
             {
 			    print $outputVCF "$chromosome\t$listingKmer{$key}{'position'}\t$key\t$refNuc\t$listingKmer{$key}{'mut'}\tDP=$DP;AF=$AF\n";
             }
