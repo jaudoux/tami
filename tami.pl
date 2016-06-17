@@ -55,7 +55,7 @@ J.Audoux / A.Soriano
   -help                   Print the... help !
   -v,--verbose            Verbose...
   -o,--output-dir         Output directory 
-  -k,--kmer_length        Kmer Length (def : 30)
+  -k,--kmer_length        Kmer Length (def : 29)
   -g,--Gene               Name of the Gene to look for in the database (hum...)
   -f,--FASTA              Use a FASTA file as input instead of a gene name 
   -q,--FASTQ              FASTQ File to work with
@@ -63,6 +63,7 @@ J.Audoux / A.Soriano
   -r,--Reverse_complement Specified if tami must use the reverse complement of the specified sequence. Set to 0 to disable. (def : true)
   -c,--cut                Set the AF above which a mutation will be selected. All mutations with a AF value lower than this one will not be selected : value must be between 0 and 1, where 0 means disabled. (def 0.01)
   -n,--nbCut              Specified the number of map above which a kmer will be chosen (def : 2)
+  -a,--another_genome     Worst name ever. Specified if another version of the human genome must be used.
 
 =cut
 
@@ -71,11 +72,12 @@ my $output_dir;
 my $geneName='';
 my $inputFASTA='';
 my $refFASTQ='';
-my $k=30;
+my $k=29;
 my $specie='human';
 my $RC = 1;
 my $cut = 0.01;
 my $nbCut = 2;
+my $genome = 'rest.ensembl.org';
 
 GetOptions( "v|verbose"           => \$verbose,
             "man"                 => \$man,
@@ -89,6 +91,7 @@ GetOptions( "v|verbose"           => \$verbose,
             "r|reverse_c=i"       => \$RC,
             "c|cut=f"             => \$cut,
             "n|nbCut=i"           => \$nbCut,
+            "a|another_genome=s"  => \$genome,
         ) or pod2usage (-verbose => 1);
 
 #Now some test to check if everything's okay.
@@ -111,9 +114,16 @@ pod2usage(
 open(my $inputFASTQ, '<', $refFASTQ) or die("open $!");
 open(my $outputVCF, '>', 'Output.vcf') or die ("open $!");
 
+if ($genome ne 'rest.ensembl.org' )# A dot is needed after the name of the genome.
+{
+    $genome =  $genome.".rest.ensembl.org";
+}
+
 my $client = REST::Client->new();
 
-$client->GET("http://rest.ensembl.org/xrefs/symbol/homo_sapiens/$geneName?content-type=application/json");
+
+
+$client->GET("http://".$genome."/xrefs/symbol/homo_sapiens/$geneName?content-type=application/json");
 
 #print STDERR Dumper($client->responseContent());
 
@@ -126,7 +136,7 @@ my $nbRefs=0;
 
 #This portion of code is not very nice... but it works !
 foreach my $ref (@{$xrefs}) {
-    $client->GET("http://rest.ensembl.org/lookup/id/".$ref->{'id'}."?content-type=application/json");
+    $client->GET("http://".$genome."/lookup/id/".$ref->{'id'}."?content-type=application/json");
 	my $gene = decode_json $client->responseContent();
     #If only one key is present, we can store the information. If not, two different cases. The first case is when more than one entry are present, but that only one is usefull. The second case is when two different entry may be usefull for the user.
     if (scalar keys $xrefs ==1){ #Easyest case, we store the values and then exit the loop
@@ -156,12 +166,12 @@ foreach my $ref (@{$xrefs}) {
 
 if ($nbRefs>1) #Only usefull if two or more usefull entrys are present. In this case we ask the user to choose the gene he want to use by typing his name. The user can see the name of each gene and the short description provided.
 {
-    print STDERR "\n$nbRefs Genes have been found.\nType the name of the gene you wan't to work with : \n";
+    print STDERR "\n$nbRefs Genes have been found.\nType the name of the gene you wan't to work with : ";
     my $name = <STDIN>;
     chomp($name);
     foreach my $ref2 (@{$xrefs})
     {    
-        $client->GET("http://rest.ensembl.org/lookup/id/".$ref2->{'id'}."?content-type=application/json");
+        $client->GET("http://".$genome."/lookup/id/".$ref2->{'id'}."?content-type=application/json");
         my $gene2 = decode_json $client->responseContent();
 	    if ((index($gene2->{'source'}, 'havana') != -1) && ($gene2->{'object_type'} eq 'Gene') )
         {
@@ -177,18 +187,23 @@ if ($nbRefs>1) #Only usefull if two or more usefull entrys are present. In this 
 
 print STDERR "\nThe gene $geneName is located on chromosome $chromosome between position $limInf and $limSup.\n\n";
 
-$client->GET("http://rest.ensembl.org/sequence/region/human/$chromosome:$limInf..$limSup:1?content-type=text/plain");
+$client->GET("http://".$genome."/sequence/region/human/$chromosome:$limInf..$limSup:1?content-type=text/plain");
 
 #Now the genome will be analysed.
 
 $inputFASTA = $client->responseContent();
+open(my $FastaGenome, '>', 'Sequence.fa') or die ("open $!"); #Récupère la séquence, pour moi.
+print $FastaGenome $inputFASTA;
+close $FastaGenome;
 my $kmer;
 my $nbKmer;
 my $name; #Permet de stocker le nom du read
 my $position=0; #Permet de stocker la position du match...
 my $kDiv2=$k/2;
+my $beenReverse=0;
+my $refNucReverse;
 
-#Construction d'une Hash devant stocké tous les Kmer non mutés. Il faudra gérer les bords aussi.
+#Construction d'une Hash devant stocker tous les Kmer non mutés. Il faudra gérer les bords aussi.
 
 my %listingKmer=();
 
@@ -198,7 +213,7 @@ for (my $i=0;$i<length($inputFASTA)-$k+1;$i++) #Construction de tous les kmer mu
 {
 	my $ref_kmer = substr ($inputFASTA, $i, $k);
 	my $refNuc= substr($ref_kmer, $kDiv2, 1);
-
+    $beenReverse=0;
 
     if ($RC != 0) #Make the RC of the RefKMer
     {
@@ -206,56 +221,44 @@ for (my $i=0;$i<length($inputFASTA)-$k+1;$i++) #Construction de tous les kmer mu
         if ($ref_kmer gt $reverseKmer)
         {
             $ref_kmer = $reverseKmer;
+            print STDERR "$ref_kmer\n";
+            $beenReverse=1;
         }
     }
-    #PAS AU BON ENDROIT HEIN
-#    if (exists($listingKmer{$kmer})) #Delete any Kmer than may be present more than one time
-    #   {
-    #    foreach my $nuc ("A", "G", "T", "C")    
-    #   {
-    #       delete($listingKmer{mutationSimple($ref_kmer, $kDiv2, $nuc)});
-    #   }
-    #   }
+    if (!$beenReverse || $k%2!=0){
+        $refNucReverse=substr($ref_kmer, $kDiv2, 1);
+    }
+    else{
+        $refNucReverse=substr($ref_kmer, $kDiv2+1, 1);
+    }
 
+    if (!exists($listingKmer{$ref_kmer})){
 	foreach my $nuc ("A", "G", "T", "C")#I wonder if making two distinct loop with and without the reverse won't be faster... in the code above the $RC is tested each time...
 	{
-		if($nuc ne $refNuc)
+		if($nuc ne $refNucReverse) #C'EST PAR ICI JE LE SENS, AVEC LE DECALAGE ! je mute plus le bon nucléotide si mon reverse complement a été fait. Osef si c'est impair, c'est pas ça, sinon ça marcherait avec 29. Mais là je mute en fonction du nucléotide de référence, donc je risque de construire des reverse complements qui ne sont pas utiles ET DE REDEFINIR LE MEME. 
 	   	{
-			$kmer = mutationSimple($ref_kmer,$kDiv2 , $nuc);
-            if ($RC)#Reverse complement.
-            {
-                my  $reverseKmer = reverseComplement($kmer);
-                if ($kmer gt $reverseKmer)
-                {
-                    $kmer = $reverseKmer;
-                }
+            if (!$beenReverse || $k%2!=0){
+			    $kmer = mutationSimple($ref_kmer,$kDiv2 , $nuc);
             }
-            if (exists($listingKmer{$kmer})) #Delete any Kmer than may be present more than one time
-            {
-                foreach my $nuc ("A", "G", "T", "C")    
-                {
-                    delete($listingKmer{mutationSimple($ref_kmer, $kDiv2, $nuc)});
-                }
-                last;
+            else{
+                $kmer = mutationSimple($ref_kmer, $kDiv2+1, $nuc);
             }
 			$listingKmer{$kmer}{'count'}=0;
 			$listingKmer{$kmer}{'ref_kmer'}=$ref_kmer;
-			$listingKmer{$kmer}{'mut'}=$nuc;
+            if ($beenReverse){
+		    	$listingKmer{$kmer}{'mut'}=reverseComplement($nuc);
+            }
+            else{
+                $listingKmer{$kmer}{'mut'}=$nuc;
+            }
 			$listingKmer{$kmer}{'position'}=int($i+$kDiv2+$limInf); #Idiot ?
 		}
 		else #Will store the total number of kmer mapped derived from the ref.
 		{
 			$listingKmer{$ref_kmer}{'count'}=0;
-            if (exists($listingKmer{$kmer})) #Delete any Kmer than may be present more than one time
-            {
-                foreach my $nuc ("A", "G", "T", "C")    
-                {
-                    delete($listingKmer{mutationSimple($ref_kmer, $kDiv2, $nuc)});
-                }
-                last;
-            }
+            $listingKmer{$ref_kmer}{'ref_nuc'}=$refNuc;
 		}
-	}
+    }}
 }
 
 my $nbRead=0;
@@ -279,13 +282,11 @@ while (<$inputFASTQ>) #Reading the fastQ file.
                 my $kmerReverseRead = reverseComplement($kmerRead);
                 if ($kmerRead gt $kmerReverseRead)
                 {
-                    print "\t";
                     $kmerRead = $kmerReverseRead;
                 }
             }
 			if (defined($listingKmer{$kmerRead})) #If this part of the read can be found somwhere in the hash.
 			{
-
 				$listingKmer{$kmerRead}{'count'}++;
                 # print Dumper($listingKmer{$kmerRead}{'count'});
                 if (defined($listingKmer{$kmerRead}{'ref_kmer'})) #If the Kmer has a reference kmer or a position, it means that it's a mutated one. So we will increment the ref in order to have an access to the DP.
@@ -301,7 +302,7 @@ while (<$inputFASTQ>) #Reading the fastQ file.
     }
 }
 
-print STDERR "$nbRead reads were present.\n\n";
+print STDERR "\n$nbRead reads were present.\n\n";
 
 close ($inputFASTQ);
 
@@ -319,10 +320,11 @@ foreach my $key ( sort {$listingKmer{$a}->{'position'} <=> $listingKmer{$b}->{'p
 {
 		if ($listingKmer{$key}{'count'}>0 && defined($listingKmer{$key}{'ref_kmer'})) #On peut rajouter cette condition dans le grep. 
 		{
-			$refNuc = substr($listingKmer{$key}{'ref_kmer'}, $kDiv2, 1);
+#			$refNuc = substr($listingKmer{$key}{'ref_kmer'}, $kDiv2, 1);#Peut être ici... Idem, devrait pas foirer avec 29 ! cette chaine n'a pas de sens ! si elle a été mutée on récupère de la merde.
+            $refNuc = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'ref_nuc'};
             $DP = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'count'};#$listingKmer{$key}{'ref_kmer'}{'count'}
   			$AF = (($listingKmer{$key}{'count'})/($DP));
-            if ($cut <= $AF && $listingKmer{$key}{'count'}>=$nbCut)
+            if ($cut <= $AF && $listingKmer{$key}{'count'}>=$nbCut && defined($listingKmer{$key}{'ref_kmer'}))
             {
 			    print $outputVCF "$chromosome\t$listingKmer{$key}{'position'}\t$key\t$refNuc\t$listingKmer{$key}{'mut'}\tDP=$DP;AF=$AF\n";
             }
@@ -340,7 +342,7 @@ sub mutation
 {
 	my ($sequence, $position)=@_;
 	my $seqLength = length($sequence);
-	my @nucleotides = ('a', 'g', 'c', 't');
+	my @nucleotides = ('A', 'G', 'C', 'T');
 	my $nucleotideRand=$nucleotides[rand(@nucleotides)];
 	substr($sequence, $position, 1, $nucleotideRand);
 	return $sequence;
