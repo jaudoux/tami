@@ -209,56 +209,67 @@ my %listingKmer=();
 
 print STDERR ("Building the Kmer list...\n");
 
-for (my $i=0;$i<length($inputFASTA)-$k+1;$i++) #Construction de tous les kmer mutés au centre.
+for (my $i=0;$i<length($inputFASTA)-$k+1;$i++) #Build every kmer with a mutation on the middle base
 {
+    my $refNuc;
 	my $ref_kmer = substr ($inputFASTA, $i, $k);
-	my $refNuc= substr($ref_kmer, $kDiv2, 1);
+    if ($k%2!=0){ #If k is an even number, then we must do this... If we don't the wrong base will be changed.
+    	$refNuc= substr($ref_kmer, $kDiv2, 1);
+    }
+    else{
+        $refNuc=substr($ref_kmer, $kDiv2-1, 1);
+    }
     $beenReverse=0;
 
-    if ($RC != 0) #Make the RC of the RefKMer
+    if ($RC != 0) #Make the RC of the RefKMer, and use it if he is lower than the ref as a string.
     {
         my  $reverseKmer = reverseComplement($ref_kmer);
         if ($ref_kmer gt $reverseKmer)
         {
             $ref_kmer = $reverseKmer;
-            print STDERR "$ref_kmer\n";
             $beenReverse=1;
         }
     }
-    if (!$beenReverse || $k%2!=0){
+    if (!$beenReverse && $k%2!=0){ #Theses 3 conditions will choose which base will be the reference one depending on k and if ref_kmer has been reversed or not.
         $refNucReverse=substr($ref_kmer, $kDiv2, 1);
     }
-    else{
-        $refNucReverse=substr($ref_kmer, $kDiv2+1, 1);
+    elsif(!$beenReverse && $k%2 == 0){
+        $refNucReverse=substr($ref_kmer, $kDiv2-1, 1);
     }
-
+    else{
+        $refNucReverse=substr($ref_kmer, $kDiv2, 1); #Same as the if... 
+    }
     if (!exists($listingKmer{$ref_kmer})){
-	foreach my $nuc ("A", "G", "T", "C")#I wonder if making two distinct loop with and without the reverse won't be faster... in the code above the $RC is tested each time...
-	{
-		if($nuc ne $refNucReverse) #C'EST PAR ICI JE LE SENS, AVEC LE DECALAGE ! je mute plus le bon nucléotide si mon reverse complement a été fait. Osef si c'est impair, c'est pas ça, sinon ça marcherait avec 29. Mais là je mute en fonction du nucléotide de référence, donc je risque de construire des reverse complements qui ne sont pas utiles ET DE REDEFINIR LE MEME. 
-	   	{
-            if (!$beenReverse || $k%2!=0){
-			    $kmer = mutationSimple($ref_kmer,$kDiv2 , $nuc);
-            }
-            else{
-                $kmer = mutationSimple($ref_kmer, $kDiv2+1, $nuc);
-            }
-			$listingKmer{$kmer}{'count'}=0;
-			$listingKmer{$kmer}{'ref_kmer'}=$ref_kmer;
-            if ($beenReverse){
-		    	$listingKmer{$kmer}{'mut'}=reverseComplement($nuc);
-            }
-            else{
-                $listingKmer{$kmer}{'mut'}=$nuc;
-            }
-			$listingKmer{$kmer}{'position'}=int($i+$kDiv2+$limInf); #Idiot ?
-		}
-		else #Will store the total number of kmer mapped derived from the ref.
-		{
+    	foreach my $nuc ("A", "G", "T", "C")#I wonder if making two distinct loop with and without the reverse won't be faster... in the code above the $RC is tested each time...
+	    {
+		    if($nuc ne $refNucReverse) #We must be carefull here. If the wrong nucleotide is used as a reference, then everything will be wrong... 
+	   	    {
+                if (!$beenReverse && $k%2!=0){
+			        $kmer = mutationSimple($ref_kmer,$kDiv2, $nuc);
+                }
+                elsif($k%2==0 && !$beenReverse){
+                    $kmer = mutationSimple($ref_kmer, $kDiv2-1, $nuc);
+                }
+                else{
+                    $kmer = mutationSimple($ref_kmer, $kDiv2, $nuc);
+                }
+			    $listingKmer{$kmer}{'count'}=0;
+			    $listingKmer{$kmer}{'ref_kmer'}=$ref_kmer;
+                if ($beenReverse){
+		    	    $listingKmer{$kmer}{'mut'}=reverseComplement($nuc);
+                }
+                else{
+                    $listingKmer{$kmer}{'mut'}=$nuc;
+                }
+			    $listingKmer{$kmer}{'position'}=int($i+$kDiv2+$limInf); #Idiot ?
+		    }
+		    else #Will store the total number of kmer mapped derived from the ref.
+		    {
 			$listingKmer{$ref_kmer}{'count'}=0;
             $listingKmer{$ref_kmer}{'ref_nuc'}=$refNuc;
-		}
-    }}
+		    }
+        }
+    }
 }
 
 my $nbRead=0;
@@ -296,7 +307,7 @@ while (<$inputFASTQ>) #Reading the fastQ file.
                 }
 			}
 		}
-        if ($nbRead%100000==0){
+        if ($nbRead%50000==0){
             print STDERR "*";
 	    }
     }
@@ -320,7 +331,6 @@ foreach my $key ( sort {$listingKmer{$a}->{'position'} <=> $listingKmer{$b}->{'p
 {
 		if ($listingKmer{$key}{'count'}>0 && defined($listingKmer{$key}{'ref_kmer'})) #On peut rajouter cette condition dans le grep. 
 		{
-#			$refNuc = substr($listingKmer{$key}{'ref_kmer'}, $kDiv2, 1);#Peut être ici... Idem, devrait pas foirer avec 29 ! cette chaine n'a pas de sens ! si elle a été mutée on récupère de la merde.
             $refNuc = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'ref_nuc'};
             $DP = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'count'};#$listingKmer{$key}{'ref_kmer'}{'count'}
   			$AF = (($listingKmer{$key}{'count'})/($DP));
