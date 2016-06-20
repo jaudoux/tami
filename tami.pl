@@ -39,7 +39,7 @@ Targeted Mutation Identification : TaMi
 
 =head1 DESCRIPTION
 
-TaMi can get a DNA Sequence from database 'ensembl' or from a fasta file, and giving a read length and a FASTQ file, will generate a VCF file with every SNPs that have been found.
+TaMi can get a DNA Sequence from database 'ensembl' or from a fasta file, and giving a read length and a FASTQ file, will generate a VCF file with every SNPs that have been found. The sequence uses by TaMi is also stored as "Sequence.fa".
 
 =head1 VERSION
 
@@ -54,44 +54,44 @@ J.Audoux / A.Soriano
   -man                    Print the manual
   -help                   Print the... help !
   -v,--verbose            Verbose...
-  -o,--output-dir         Output directory 
-  -k,--kmer_length        Kmer Length (def : 29)
+  -o,--output-fileName    Specify the name of the output vcf file.
+  -k,--kmer_length        Kmer Length (def : 30)
   -g,--Gene               Name of the Gene to look for in the database (hum...)
   -f,--FASTA              Use a FASTA file as input instead of a gene name 
   -q,--FASTQ              FASTQ File to work with
-  -s,--Species            The species you are working with (def : human)
+  -s,--Species            The species you are working with (def : homo_sapiens)
   -r,--Reverse_complement Specified if tami must use the reverse complement of the specified sequence. Set to 0 to disable. (def : true)
   -c,--cut                Set the AF above which a mutation will be selected. All mutations with a AF value lower than this one will not be selected : value must be between 0 and 1, where 0 means disabled. (def 0.01)
   -n,--nbCut              Specified the number of map above which a kmer will be chosen (def : 2)
-  -a,--another_genome     Worst name ever. Specified if another version of the human genome must be used.
+  -a,--another_genome     Worst name ever. Specified if another version of the genome must be used.
 
 =cut
 
 my ($help, $man, $verbose);
-my $output_dir;
+my $output_fileName="Output.vcf";
 my $geneName='';
 my $inputFASTA='';
 my $refFASTQ='';
-my $k=29;
-my $specie='human';
+my $k=30;
+my $specie='homo_sapiens';
 my $RC = 1;
 my $cut = 0.01;
 my $nbCut = 2;
 my $genome = 'rest.ensembl.org';
 
-GetOptions( "v|verbose"           => \$verbose,
-            "man"                 => \$man,
-            "help"                => \$help,
-            "o|output-dir=s"      => \$output_dir,
-            "k|kmer_length=i"     => \$k,
-            "g|gene_name=s"       => \$geneName,
-            "f|FASTA_file=s"      => \$inputFASTA,
-            "q|FASTQ_file=s"      => \$refFASTQ,
-            "s|specie=s"          => \$specie,
-            "r|reverse_c=i"       => \$RC,
-            "c|cut=f"             => \$cut,
-            "n|nbCut=i"           => \$nbCut,
-            "a|another_genome=s"  => \$genome,
+GetOptions( "v|verbose"              => \$verbose,
+            "man"                    => \$man,
+            "help"                   => \$help,
+            "o|output-filename=s"    => \$output_fileName,
+            "k|kmer_length=i"        => \$k,
+            "g|gene_name=s"          => \$geneName,
+            "f|FASTA_file=s"         => \$inputFASTA,
+            "q|FASTQ_file=s"         => \$refFASTQ,
+            "s|specie=s"             => \$specie,
+            "r|reverse_c=i"          => \$RC,
+            "c|cut=f"                => \$cut,
+            "n|nbCut=i"              => \$nbCut,
+            "a|another_genome=s"     => \$genome,
         ) or pod2usage (-verbose => 1);
 
 #Now some test to check if everything's okay.
@@ -112,20 +112,21 @@ pod2usage(
 ) unless ($geneName xor $inputFASTA);
 
 open(my $inputFASTQ, '<', $refFASTQ) or die("open $!");
-open(my $outputVCF, '>', 'Output.vcf') or die ("open $!");
+open(my $outputVCF, '>', $output_fileName) or die ("open $!");
 
 if ($genome ne 'rest.ensembl.org' )# A dot is needed after the name of the genome.
 {
     $genome =  $genome.".rest.ensembl.org";
 }
 
+print STDERR "\n\n\t -- TaMi : Targeted Mutation Identification --\n\n\n";
+
 my $client = REST::Client->new();
 
 
 
-$client->GET("http://".$genome."/xrefs/symbol/homo_sapiens/$geneName?content-type=application/json");
+$client->GET("http://".$genome."/xrefs/symbol/$specie/$geneName?content-type=application/json");
 
-#print STDERR Dumper($client->responseContent());
 
 my $xrefs = decode_json $client->responseContent();
 
@@ -187,7 +188,7 @@ if ($nbRefs>1) #Only usefull if two or more usefull entrys are present. In this 
 
 print STDERR "\nThe gene $geneName is located on chromosome $chromosome between position $limInf and $limSup.\n\n";
 
-$client->GET("http://".$genome."/sequence/region/human/$chromosome:$limInf..$limSup:1?content-type=text/plain");
+$client->GET("http://".$genome."/sequence/region/$specie/$chromosome:$limInf..$limSup:1?content-type=text/plain");
 
 #Now the genome will be analysed.
 
@@ -224,8 +225,7 @@ for (my $i=0;$i<length($inputFASTA)-$k+1;$i++) #Build every kmer with a mutation
     if ($RC != 0) #Make the RC of the RefKMer, and use it if he is lower than the ref as a string.
     {
         my  $reverseKmer = reverseComplement($ref_kmer);
-        if ($ref_kmer gt $reverseKmer)
-        {
+        if ($ref_kmer gt $reverseKmer){
             $ref_kmer = $reverseKmer;
             $beenReverse=1;
         }
@@ -261,7 +261,12 @@ for (my $i=0;$i<length($inputFASTA)-$k+1;$i++) #Build every kmer with a mutation
                 else{
                     $listingKmer{$kmer}{'mut'}=$nuc;
                 }
-			    $listingKmer{$kmer}{'position'}=int($i+$kDiv2+$limInf); #Idiot ?
+                if ($k%2!=0){
+    			    $listingKmer{$kmer}{'position'}=int($i+$kDiv2+$limInf); #Idiot 
+                }
+                else{
+    			    $listingKmer{$kmer}{'position'}=int($i+$kDiv2-1+$limInf); #Idiot 
+                }
 		    }
 		    else #Will store the total number of kmer mapped derived from the ref.
 		    {
@@ -319,7 +324,7 @@ close ($inputFASTQ);
 
 my $compteur=0; 
 
-print STDERR ("Writing the output file as Output.vcf...\n");
+print STDERR ("Writing the output file as $output_fileName\n");
 
 print $outputVCF "Chrom\tPos\tID\tRef\tAlt\tInfo\n";
 
@@ -336,7 +341,7 @@ foreach my $key ( sort {$listingKmer{$a}->{'position'} <=> $listingKmer{$b}->{'p
   			$AF = (($listingKmer{$key}{'count'})/($DP));
             if ($cut <= $AF && $listingKmer{$key}{'count'}>=$nbCut && defined($listingKmer{$key}{'ref_kmer'}))
             {
-			    print $outputVCF "$chromosome\t$listingKmer{$key}{'position'}\t$key\t$refNuc\t$listingKmer{$key}{'mut'}\tDP=$DP;AF=$AF\n";
+                printf $outputVCF "%s\t%d\t%s\t%s\t%s\tDP=%d;AF=%.3f;AC=%d\n",$chromosome,$listingKmer{$key}{'position'},$key,$refNuc,$listingKmer{$key}{'mut'},$DP,$AF,$listingKmer{$key}{'count'};
             }
 		}
 }
