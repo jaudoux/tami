@@ -47,7 +47,7 @@ input:
 
 output:
 
-  -o,--output FILE                Name of the output vcf file.
+  -o,--output FILE                Name of the output vcf file. (default: STDOUT)
 
 algorithmic features:
 
@@ -72,7 +72,7 @@ input filter:
 =cut
 
 my ($help, $man, $verbose);
-my $output_fileName="Output.vcf";
+my $output_fileName;
 my $geneName='';
 my $inputFASTA='';
 my $k=30;
@@ -395,7 +395,12 @@ print STDERR "\n$nbRead reads were present.\n\n";
 #
 print STDERR ("Writing the output file as $output_fileName\n");
 
-open(my $outputVCF, '>', $output_fileName) or die ("open $!");
+my $outputVCF;
+if(defined $output_fileName) {
+  open($outputVCF, '>', $output_fileName) or die ("open $!");
+} else {
+  $outputVCF = \*STDOUT;
+}
 
 # Print VCF headers
 print $outputVCF "##fileformat=VCFv4.1\n";
