@@ -27,7 +27,7 @@ use Data::Dumper;
 use JSON;
 use Pod::Usage;
 
-=pod
+my $VERSION = 0.01;
 
 =head1 NAME
 
@@ -104,6 +104,7 @@ my $max_coverage = undef;
 my $use_grch37;
 my $ensembl_api_url = 'rest.ensembl.org';
 my $nameBed = '';
+my $commandLine = join " ", $0, @ARGV;
 
 GetOptions( "v|verbose"           => \$verbose,
     "man"                         => \$man,
@@ -430,7 +431,17 @@ my $compteur=0;
 
 print STDERR ("Writing the output file as $output_fileName\n");
 
-print $outputVCF "Chrom\tPos\tID\tRef\tAlt\tInfo\n"; #Column name.
+# Print VCF headers
+print $outputVCF "##fileformat=VCFv4.1\n";
+print $outputVCF "##source=TaMI v$VERSION\n";
+print $outputVCF '##commandline="'.$commandLine.'"',"\n";
+print $outputVCF '##INFO=<ID=DP,Number=1,Type=Integer,',
+                 'Description="Total read depth at the locus">',"\n";
+print $outputVCF '##INFO=<ID=AC,Number=A,Type=Integer,',
+                 'Description="Total number of alternate alleles in called genotypes">',"\n";
+print $outputVCF '##INFO=<ID=AF,Number=A,Type=Float,',
+                 'Description="Estimated allele frequency in the range (0,1]">',"\n",
+print $outputVCF "#".join("\t",qw(CHROM POS ID REF ALT QUAL FILTER INFO)),"\n";
 
 my @sorted_kmers = sort { $listingKmer{$a}{'chromo'} cmp $listingKmer{$b}{'chromo'} || 
                           $listingKmer{$a}->{'position'} <=> $listingKmer{$b}->{'position'}
