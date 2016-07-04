@@ -35,7 +35,7 @@ Targeted Mutation Identification : TaMi
 
 =head1 SYNOPSIS
 
-./TaMi.pl -g geneName -k Kmer_Length -q FASTQ_File
+./TaMi.pl -g GENE_NAME [-k KMER_LENGTH] FASTQ_FILES
 
 =head1 DESCRIPTION
 
@@ -51,20 +51,42 @@ J.Audoux / A.Soriano
 
 =head1 OPTIONS
 
-  -man                    Print the manual
-  -help                   Print the... help !
-  -v,--verbose            Verbose...
-  -o,--output-fileName    Specify the name of the output vcf file.
-  -k,--kmer_length        Kmer Length (def : 30)
-  -g,--Gene               Name of the Gene to look for in the database (hum...)
-  -f,--FASTA              Use a FASTA file as input instead of a gene name 
-  -q,--FASTQ              FASTQ File to work with
-  -s,--Species            The species you are working with (def : homo_sapiens)
-  -r,--Reverse_complement Specified if tami must use the reverse complement of the specified sequence. Set to 0 to disable. (def : true)
-  -c,--cut                Set the AF above which a mutation will be selected. All mutations with a AF value lower than this one will not be selected : value must be between 0 and 1, where 0 means disabled. (def 0.01)
-  -n,--nbCut              Specified the number of map above which a kmer will be chosen (def : 2)
-  -a,--another_genome     Worst name ever. Specified if another version of the genome must be used.
-  -b,--bed                Use a bed file as input instead of a gene name.
+  -man                            Print the manual.
+  -help                           Print this help dialog.
+  -v,--verbose                    Verbose mode.
+
+input:
+
+  -g,--gene STR                   Name of the Gene to look for in the database (hum...)
+  -b,--bed  FILE                  Use a bed file as input instead of a gene name.
+  -f,--FASTA FILE                 Use a FASTA file as input instead of a gene name 
+  -s,--Species STR                The species you are working with (def : homo_sapiens)
+  --grch37                        Use Ensembl API with the human genome in
+                                  version GRCh37 (alias of Hg19)
+
+output:
+
+  -o,--output FILE                Name of the output vcf file.
+
+algorithmic features:
+
+  -k,--kmer_length INT            K-mer length (default : 30)
+  --disable-canonical             A k-mer and its reverse complement are
+                                  considered as different sequences.the
+                                  specified sequence. (default : false)
+
+input filter:
+
+  -F,--min-alternate-fraction N   Require at least this fraction of observations
+                                  supporting an alternate allele in the in order
+                                  to evaluate the position. (default: 0.01)
+  -C,--min-alternate-count N      Require at least this count of observations
+                                  supporting an alternate allele to evaluate the
+                                  position. (default : 2)
+  --min-coverage N                Require at least this coverage to process a
+                                  site. (default: 0)
+  --max-coverage N                Do not process sites with greater than this
+                                  coverage. (default: no limit)
 
 =cut
 
@@ -72,29 +94,41 @@ my ($help, $man, $verbose);
 my $output_fileName="Output.vcf";
 my $geneName='';
 my $inputFASTA='';
-my $refFASTQ='';
 my $k=30;
 my $specie='homo_sapiens';
-my $RC = 1;
-my $cut = 0.01;
-my $nbCut = 2;
-my $genome = 'rest.ensembl.org';
+my $disable_RC;
+my $min_alternate_fraction = 0.01;
+my $min_alternate_count = 2;
+my $min_coverage = 0;
+my $max_coverage = undef;
+my $use_grch37;
+my $ensembl_api_url = 'rest.ensembl.org';
 my $nameBed = '';
 
-GetOptions( "v|verbose"      => \$verbose,
-    "man"                    => \$man,
-    "help"                   => \$help,
-    "o|output-filename=s"    => \$output_fileName,
-    "k|kmer_length=i"        => \$k,
-    "g|gene_name=s"          => \$geneName,
-    "f|FASTA_file=s"         => \$inputFASTA,
-    "q|FASTQ_file=s"         => \$refFASTQ,
-    "s|specie=s"             => \$specie,
-    "r|reverse_c=i"          => \$RC,
-    "c|cut=f"                => \$cut,
-    "n|nbCut=i"              => \$nbCut,
-    "a|another_genome=s"     => \$genome,
-    "b|bed=s"                => \$nameBed,
+GetOptions( "v|verbose"           => \$verbose,
+    "man"                         => \$man,
+    "help"                        => \$help,
+
+    # input
+    "g|gene_name=s"               => \$geneName,
+    "b|bed=s"                     => \$nameBed,
+    "f|FASTA_file=s"              => \$inputFASTA,
+    "s|specie=s"                  => \$specie,
+    "grch37"                      => \$use_grch37,
+
+    # output
+    "o|output-filename=s"         => \$output_fileName,
+
+    # algorithmic features
+    "k|kmer_length=i"             => \$k,
+    "disable-canonical"           => \$disable_RC,
+
+    # input filters
+    "F|min-alternate-fraction=f"  => \$min_alternate_fraction,
+    "C|min-alternate-count=i"     => \$min_alternate_count,
+    "--min-coverage=i"            => \$min_coverage,
+    "--max-coverage=i"            => \$max_coverage,
+
 ) or pod2usage (-verbose => 1);
 
 #Now some test to check if everything's okay.
@@ -105,20 +139,22 @@ pod2usage(-verbose => 1)  if ($help);
 pod2usage(-verbose => 2)  if ($man);
 
 pod2usage(
-    -message => "Mandatory argument 'FASTQ_file' is missing",
-    -verbose => 1,
-) unless defined $refFASTQ;
-
-pod2usage(
     -message => "Only one input genome can be specified",
     -verbose => 1,
 ) unless ($geneName xor $nameBed);
 
+my $refFASTQ = shift @ARGV;
+
+pod2usage(
+    -message => "Mandatory argument 'FASTQ_file' is missing",
+    -verbose => 1,
+) unless defined $refFASTQ;
+
 open(my $inputFASTQ, '<', $refFASTQ) or die("open $!");
 open(my $outputVCF, '>', $output_fileName) or die ("open $!");
 
-if ($genome ne 'rest.ensembl.org' ){# A dot is needed after the name of the genome.
-    $genome =  $genome.".rest.ensembl.org";
+if ($use_grch37){# A dot is needed after the name of the genome.
+    $ensembl_api_url = "grch37".$ensembl_api_url;
 }
 
 print STDERR "\n\n\t -- TaMi : Targeted Mutation Identification --\n\n\n";
@@ -143,7 +179,7 @@ my %listingKmer=();
 
 #If the Name of a Gene has been specified
 if ($geneName){
-    $client->GET("http://".$genome."/xrefs/symbol/$specie/$geneName?content-type=application/json");
+    $client->GET("http://".$ensembl_api_url."/xrefs/symbol/$specie/$geneName?content-type=application/json");
 
     my $xrefs = decode_json $client->responseContent();
 
@@ -151,7 +187,7 @@ if ($geneName){
 
 #This portion of code is not very nice... but it works !
     foreach my $ref (@{$xrefs}) {
-        $client->GET("http://".$genome."/lookup/id/".$ref->{'id'}."?content-type=application/json");
+        $client->GET("http://".$ensembl_api_url."/lookup/id/".$ref->{'id'}."?content-type=application/json");
         my $gene = decode_json $client->responseContent();
         #If only one key is present, we can store the information. If not, two different cases. The first case is when more than one entry are present, but that only one is usefull. The second case is when two different entry may be usefull for the user.
         if (scalar keys $xrefs ==1){ #Easyest case, we store the values and then exit the loop
@@ -184,7 +220,7 @@ if ($geneName){
         my $count=0;
         chomp($name);
         foreach my $ref2 (@{$xrefs}){    
-            $client->GET("http://".$genome."/lookup/id/".$ref2->{'id'}."?content-type=application/json");
+            $client->GET("http://".$ensembl_api_url."/lookup/id/".$ref2->{'id'}."?content-type=application/json");
             my $gene2 = decode_json $client->responseContent();
             if ((index($gene2->{'source'}, 'havana') != -1) && ($gene2->{'object_type'} eq 'Gene')){
                 $count++;
@@ -201,7 +237,7 @@ if ($geneName){
 
     print STDERR "\nThe gene $geneName is located on chromosome $chromosome between position $limInf and $limSup.\n\n";
 
-    $client->GET("http://".$genome."/sequence/region/$specie/$chromosome:$limInf..$limSup:1?content-type=text/plain");
+    $client->GET("http://".$ensembl_api_url."/sequence/region/$specie/$chromosome:$limInf..$limSup:1?content-type=text/plain");
 
     $inputFASTA = $client->responseContent();
     open(my $FastaGenome, '>', 'Sequence.fa') or die ("open $!"); #Récupère la séquence, pour moi.
@@ -223,7 +259,7 @@ if ($geneName){
         }
         $beenReverse=0;
 
-        if ($RC){ #Make the RC of the RefKMer, and use it if he is lower than the ref as a string.
+        if (!$disable_RC){ #Make the RC of the RefKMer, and use it if he is lower than the ref as a string.
             my  $reverseKmer = reverseComplement($ref_kmer);
             if ($ref_kmer gt $reverseKmer){
                 $ref_kmer = $reverseKmer;
@@ -285,7 +321,7 @@ elsif ($nameBed){
         $number++;
         if ($number%10==0){print STDERR "*";}#Just print little stars...
         @ligne = split /\s+/, $_; #This array will contain 3 informations - 0 : Chromosome Name - 1 : beggining of the region ; 2 - end of the region. We need a bed file without the chr before chrom n
-        $client->GET("http://".$genome."/sequence/region/$specie/$ligne[0]:".($ligne[1])."..".($ligne[2]).":1?content-type=text/plain");
+        $client->GET("http://".$ensembl_api_url."/sequence/region/$specie/$ligne[0]:".($ligne[1])."..".($ligne[2]).":1?content-type=text/plain");
         $inputFASTA = $client->responseContent(); #Now the sequence corresponding to a line in our Bed is stored in $inputFASTA
         for (my $i=0;$i<length($inputFASTA)-$k+1;$i++) #Build every kmer with a mutation on the middle base
         {
@@ -299,7 +335,7 @@ elsif ($nameBed){
             }
             $beenReverse=0;
 
-            if ($RC){ #Make the RC of the RefKMer, and use it if he is lower than the ref as a string.
+            if (!$disable_RC){ #Make the RC of the RefKMer, and use it if he is lower than the ref as a string.
                 my  $reverseKmer = reverseComplement($ref_kmer);
                 if ($ref_kmer gt $reverseKmer){
                     $ref_kmer = $reverseKmer;
@@ -367,7 +403,7 @@ while (<$inputFASTQ>){ #Reading the fastQ file.
         chomp($ligneQ);
         for (my $i=0;$i<=length($ligneQ)-$k;$i++){ #Build the Kmer of the selected read.
             $kmerRead = substr($ligneQ, $i, $k);
-            if ($RC){#Reverse Complement
+            if (!$disable_RC){#Reverse Complement
                 my $kmerReverseRead = reverseComplement($kmerRead);
                 if ($kmerRead gt $kmerReverseRead){
                     $kmerRead = $kmerReverseRead;
@@ -396,22 +432,40 @@ print STDERR ("Writing the output file as $output_fileName\n");
 
 print $outputVCF "Chrom\tPos\tID\tRef\tAlt\tInfo\n"; #Column name.
 
-my $refNuc;
-my $DP; #Stored in the 'count' value of the ref_kmer of each kmer.
-my $AF; #Just a mean (allele frequency)
+my @sorted_kmers = sort { $listingKmer{$a}{'chromo'} cmp $listingKmer{$b}{'chromo'} || 
+                          $listingKmer{$a}->{'position'} <=> $listingKmer{$b}->{'position'}
+                   } grep { defined $listingKmer{$_}{'ref_kmer'} &&
+                            $listingKmer{$_}{'count'} >= $min_alternate_count
+                   } keys %listingKmer;
 
-foreach my $key ( sort {$listingKmer{$a}->{'position'} <=> $listingKmer{$b}->{'position'}} grep { defined $listingKmer{$_}{'position'}} keys %listingKmer){
-    if ($listingKmer{$key}{'count'}>0 && defined($listingKmer{$key}{'ref_kmer'})){ #This condition will be defined in the previous grep
-        $refNuc = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'ref_nuc'};
-        $DP = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'count'};
-        $AF = (($listingKmer{$key}{'count'})/($DP));
-        if ($cut <= $AF && $listingKmer{$key}{'count'}>=$nbCut && defined($listingKmer{$key}{'ref_kmer'}) && $geneName){
-            printf $outputVCF "%s\t%d\t%s\t%s\t%s\tDP=%d;AF=%.3f;AC=%d\n",$chromosome,$listingKmer{$key}{'position'},$key,$refNuc,$listingKmer{$key}{'mut'},$DP,$AF,$listingKmer{$key}{'count'};
-        }
-        elsif ($cut <= $AF && $listingKmer{$key}{'count'}>=$nbCut && defined($listingKmer{$key}{'ref_kmer'}) && $nameBed){
-            printf $outputVCF "%s\t%d\t%s\t%s\t%s\tDP=%d;AF=%.3f;AC=%d\n",$listingKmer{$key}{'chromo'},$listingKmer{$key}{'position'},$key,$refNuc,$listingKmer{$key}{'mut'},$DP,$AF,$listingKmer{$key}{'count'};
-        }
+foreach my $key (@sorted_kmers){
+    # Compute stats
+    my $refNuc = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'ref_nuc'};
+    my $DP = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'count'};
+    my $AF = (($listingKmer{$key}{'count'})/($DP));
+    
+    # Apply filters
+    next if $AF < $min_alternate_fraction;
+    next if $DP < $min_coverage;
+    next if defined $max_coverage && $DP > $max_coverage;
+
+    # Get chr name
+    my $chr;
+    if($geneName){
+      $chr = $chromosome;
+    } elsif ($nameBed){
+      $chr = $listingKmer{$key}{'chromo'};
     }
+
+    # Print VCF line
+    print $outputVCF join("\t",
+      $chromosome,
+      $listingKmer{$key}{'position'},
+      $key,
+      $refNuc,
+      $listingKmer{$key}{'mut'},
+      join(";","DP=$DP","AF=$AF","AC=$listingKmer{$key}{'count'}")
+    ),"\n";
 }
 print STDERR "\n\n --- END --- \n\n";
 
