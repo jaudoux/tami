@@ -1,29 +1,10 @@
 #!/usr/bin/env perl
-#===============================================================================
-#
-#         FILE: compteKmer.pl
-#
-#        USAGE: ./compteKmer.pl  
-#
-#  DESCRIPTION: 
-#
-#      OPTIONS: ---
-# REQUIREMENTS: ---
-#         BUGS: ---
-#        NOTES: ---
-#       AUTHOR: YOUR NAME (), 
-# ORGANIZATION: 
-#      VERSION: 1.0
-#      CREATED: 06/06/2016 17:37:38
-#     REVISION: ---
-#===============================================================================
 
 use strict;
 use warnings;
 use utf8;
 use Getopt::Long;
 use REST::Client;
-use Data::Dumper;
 use JSON;
 use Pod::Usage;
 
@@ -145,15 +126,12 @@ pod2usage(
   -verbose => 1,
 ) unless ($geneName xor $nameBed);
 
-my $refFASTQ = shift @ARGV;
+my @FASTQ_files = shift @ARGV;
 
 pod2usage(
   -message => "Mandatory argument 'FASTQ_file' is missing",
   -verbose => 1,
-) unless defined $refFASTQ;
-
-open(my $inputFASTQ, '<', $refFASTQ) or die("open $!");
-open(my $outputVCF, '>', $output_fileName) or die ("open $!");
+) if scalar @FASTQ_files == 0;
 
 if ($use_grch37){# A dot is needed after the name of the genome.
   $ensembl_api_url = "grch37".$ensembl_api_url;
@@ -340,6 +318,7 @@ foreach my $interval (@merged_intervals) {
 
           # FIXME we should check that the mutated k-mer is not already in the hash, otherwise
           # their is a collision that need to be handled
+          next if exists $listingKmer{$kmer};
           
           # FIXME we should store all these informations in a file to avoid having a huge amount
           # of memory used for nothing
@@ -362,6 +341,7 @@ foreach my $interval (@merged_intervals) {
         else{ #Will store the total number of kmer mapped derived from the ref.
           $listingKmer{$ref_kmer}{'count'}=0;
           $listingKmer{$ref_kmer}{'ref_nuc'}=$refNuc;
+          #$listingKmer{$ref_kmer}{'ref_kmer'} = $ref_kmer;
         }
       }
     }
@@ -376,41 +356,46 @@ print STDERR ("\n\nReading FASTQ file...\n");
 my $kmerRead;
 my $nbRead=0;
 
-while (<$inputFASTQ>){ #Reading the fastQ file.
-  my $ligneQ = $_;
-  if ($.%4 == 2){ #Read selection.
-    $nbRead++;
-    chomp($ligneQ);
-    for (my $i=0;$i<=length($ligneQ)-$k;$i++){ #Build the Kmer of the selected read.
-      $kmerRead = substr($ligneQ, $i, $k);
-      if (!$disable_RC){#Reverse Complement
-        my $kmerReverseRead = reverseComplement($kmerRead);
-        if ($kmerRead gt $kmerReverseRead){
-          $kmerRead = $kmerReverseRead;
+foreach my $file (@FASTQ_files) {
+  open(my $inputFASTQ, '<', $file) or die("open $!");
+  while (<$inputFASTQ>){
+    my $ligneQ = $_;
+    if ($.%4 == 2){ #Read selection.
+      $nbRead++;
+      chomp($ligneQ);
+      for (my $i=0;$i<=length($ligneQ)-$k;$i++){ #Build the Kmer of the selected read.
+        $kmerRead = substr($ligneQ, $i, $k);
+        if (!$disable_RC){#Reverse Complement
+          my $kmerReverseRead = reverseComplement($kmerRead);
+          if ($kmerRead gt $kmerReverseRead){
+            $kmerRead = $kmerReverseRead;
+          }
+        }
+        if (defined($listingKmer{$kmerRead})){ #If this part of the read can be found somwhere in the hash.
+          $listingKmer{$kmerRead}{'count'}++;
+          if (defined($listingKmer{$kmerRead}{'ref_kmer'})){ #If the Kmer has a reference kmer or a position, it means that it's a mutated one. So we will increment the ref in order to have an access to the DP.
+            $listingKmer{$listingKmer{$kmerRead}{'ref_kmer'}}{'count'}++;
+          }
         }
       }
-      if (defined($listingKmer{$kmerRead})){ #If this part of the read can be found somwhere in the hash.
-        $listingKmer{$kmerRead}{'count'}++;
-        if (defined($listingKmer{$kmerRead}{'ref_kmer'})){ #If the Kmer has a reference kmer or a position, it means that it's a mutated one. So we will increment the ref in order to have an access to the DP.
-          $listingKmer{$listingKmer{$kmerRead}{'ref_kmer'}}{'count'}++;
-        }
+      if ($nbRead%50000==0){#Just print litle stars, again.
+        print STDERR "*";
       }
-    }
-    if ($nbRead%50000==0){#Just print litle stars, again.
-      print STDERR "*";
     }
   }
+  close ($inputFASTQ);
 }
 
 print STDERR "\n$nbRead reads were present.\n\n";
 
-close ($inputFASTQ);
 
 
 # #############################################################################
 # STEP 4 : FILTER AND PRINT OUTPUT
 #
 print STDERR ("Writing the output file as $output_fileName\n");
+
+open(my $outputVCF, '>', $output_fileName) or die ("open $!");
 
 # Print VCF headers
 print $outputVCF "##fileformat=VCFv4.1\n";
@@ -421,7 +406,7 @@ print $outputVCF '##INFO=<ID=DP,Number=1,Type=Integer,',
 print $outputVCF '##INFO=<ID=AC,Number=A,Type=Integer,',
                  'Description="Total number of alternate alleles in called genotypes">',"\n";
 print $outputVCF '##INFO=<ID=AF,Number=A,Type=Float,',
-                 'Description="Estimated allele frequency in the range (0,1]">',"\n",
+                 'Description="Estimated allele frequency in the range (0,1]">',"\n";
 print $outputVCF "#".join("\t",qw(CHROM POS ID REF ALT QUAL FILTER INFO)),"\n";
 
 # Get kmers sorted by chr and positions
