@@ -186,7 +186,7 @@ if ($geneName){
     $client->GET("http://".$ensembl_api_url."/lookup/id/".$ref->{'id'}."?content-type=application/json");
     my $gene = decode_json $client->responseContent();
     #If only one key is present, we can store the information. If not, two different cases. The first case is when more than one entry are present, but that only one is usefull. The second case is when two different entry may be usefull for the user.
-    if (scalar keys $xrefs ==1){ #Easyest case, we store the values and then exit the loop
+    if (scalar keys %{$xrefs} ==1){ #Easyest case, we store the values and then exit the loop
       $chromosome=$gene->{'seq_region_name'};
       $limInf = $gene->{'start'};
       $limSup = $gene->{'end'};
@@ -280,7 +280,7 @@ my $kmer;
 foreach my $interval (@merged_intervals) {
 
   my $chromosome = $interval->{chr};
-  my $limInf     = $interval->{strart};
+  my $limInf     = $interval->{start};
   my $limSup     = $interval->{end};
 
   $client->GET("http://".$ensembl_api_url."/sequence/region/$specie/$chromosome:$limInf..$limSup:1?content-type=text/plain");
@@ -288,7 +288,7 @@ foreach my $interval (@merged_intervals) {
   $inputFASTA = $client->responseContent();
 
   #Build a hash with every kmer with all the possible mutations on the midle base.
-  print STDERR ("Building the Kmer list...");
+  #print STDERR ("Building the Kmer list...");
 
   for (my $i=0;$i<length($inputFASTA)-$k+1;$i++) #Build every kmer with a mutation on the middle base
   {
@@ -337,6 +337,9 @@ foreach my $interval (@merged_intervals) {
           if ($kmer gt $reverseKmer){
             $kmer = $reverseKmer;
           }
+
+          # FIXME we should check that the mutated k-mer is not already in the hash, otherwise
+          # their is a collision that need to be handled
           
           # FIXME we should store all these informations in a file to avoid having a huge amount
           # of memory used for nothing
