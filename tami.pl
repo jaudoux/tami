@@ -86,10 +86,12 @@ my $use_grch37;
 my $ensembl_api_url = 'rest.ensembl.org';
 my $nameBed = '';
 my $commandLine = join " ", $0, @ARGV;
+my $debug;
 
 GetOptions( "v|verbose"           => \$verbose,
   "man"                         => \$man,
   "help"                        => \$help,
+  "debug"                       => \$debug,
 
   # input
   "g|gene_name=s"               => \$geneName,
@@ -126,7 +128,7 @@ pod2usage(
   -verbose => 1,
 ) unless ($geneName xor $nameBed);
 
-my @FASTQ_files = shift @ARGV;
+my @FASTQ_files = @ARGV;
 
 pod2usage(
   -message => "Mandatory argument 'FASTQ_file' is missing",
@@ -164,7 +166,7 @@ if ($geneName){
     $client->GET("http://".$ensembl_api_url."/lookup/id/".$ref->{'id'}."?content-type=application/json");
     my $gene = decode_json $client->responseContent();
     #If only one key is present, we can store the information. If not, two different cases. The first case is when more than one entry are present, but that only one is usefull. The second case is when two different entry may be usefull for the user.
-    if (scalar keys %{$xrefs} ==1){ #Easyest case, we store the values and then exit the loop
+    if (scalar @{$xrefs} ==1){ #Easyest case, we store the values and then exit the loop
       $chromosome=$gene->{'seq_region_name'};
       $limInf = $gene->{'start'};
       $limSup = $gene->{'end'};
@@ -215,7 +217,7 @@ if ($geneName){
 
 # case 2: If a bed file has been specified by the user
 } elsif ($nameBed){
-  print "Building the Kmer list using a Bed file...\n";
+  print STDERR "Building the Kmer list using a Bed file...\n";
   open(my $inputBed, '<', $nameBed) or die("open $!");
   my @ligne;
   while (<$inputBed>){
@@ -256,10 +258,12 @@ my $refNucReverse;
 my $kIsOdd=$k%2;
 my $kmer;
 foreach my $interval (@merged_intervals) {
-
+  
   my $chromosome = $interval->{chr};
   my $limInf     = $interval->{start};
   my $limSup     = $interval->{end};
+
+  print STDERR "Check interval : $chromosome:$limInf-$limSup\n" if $debug;
 
   $client->GET("http://".$ensembl_api_url."/sequence/region/$specie/$chromosome:$limInf..$limSup:1?content-type=text/plain");
 
@@ -296,9 +300,11 @@ foreach my $interval (@merged_intervals) {
     else{
       $refNucReverse=substr($ref_kmer, $kDiv2, 1); #Same as the if... 
     }
+    my $mut_pos = $kIsOdd ? int($i+$kDiv2+$limInf) : int($i+$kDiv2-1+$limInf);
     if(!exists($listingKmer{$ref_kmer})) {
       foreach my $nuc ("A", "G", "T", "C") {
         if($nuc ne $refNucReverse){ 
+          # Create a mutation on the middle of the k-mer
           if (!$beenReverse && $kIsOdd){
             $kmer = mutationSimple($ref_kmer,$kDiv2, $nuc);
           }
@@ -325,23 +331,12 @@ foreach my $interval (@merged_intervals) {
           $listingKmer{$kmer}{'count'}    = 0;
           $listingKmer{$kmer}{'chromo'}   = $chromosome;
           $listingKmer{$kmer}{'ref_kmer'} = $ref_kmer;
-          if ($beenReverse){
-            $listingKmer{$kmer}{'mut'}=reverseComplement($nuc);
-          }
-          else{
-            $listingKmer{$kmer}{'mut'}=$nuc;
-          }
-          if ($kIsOdd){
-            $listingKmer{$kmer}{'position'}=int($i+$kDiv2+$limInf);
-          }
-          else{
-            $listingKmer{$kmer}{'position'}=int($i+$kDiv2-1+$limInf);
-          }
+          $listingKmer{$kmer}{'mut'} = $beenReverse ? reverseComplement($nuc) : $nuc;
+          $listingKmer{$kmer}{'position'} = $mut_pos;
         }
-        else{ #Will store the total number of kmer mapped derived from the ref.
+        else { #Will store the total number of kmer mapped derived from the ref.
           $listingKmer{$ref_kmer}{'count'}=0;
           $listingKmer{$ref_kmer}{'ref_nuc'}=$refNuc;
-          #$listingKmer{$ref_kmer}{'ref_kmer'} = $ref_kmer;
         }
       }
     }
