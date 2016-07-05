@@ -229,7 +229,7 @@ if ($geneName){
   }
 }
 
-# TODO remove overlapping intervals
+# Remove overlapping intervals
 my @sorted_intervals = sort { $a->{chr} cmp $b->{chr} || $a->{start} <=> $b->{start} } @genomic_intervals;
 my @merged_intervals;
 my $curr_interval = shift @sorted_intervals;
@@ -239,7 +239,7 @@ for(my $i = 0; $i < scalar @sorted_intervals; $i++) {
     $sorted_intervals[$i]->{start} <= $curr_interval->{end}) {
     # Update the "end" position
     $curr_interval->{end} = $sorted_intervals[$i]->{end} unless $sorted_intervals[$i]->{end} < $curr_interval->{end};
-  # Otherwise we push the current interval to th merged intervals
+  # Otherwise we push the current interval to the merged intervals
   } else {
     push @merged_intervals, $curr_interval;
     $curr_interval = $sorted_intervals[$i];
@@ -274,41 +274,27 @@ foreach my $interval (@merged_intervals) {
 
   for (my $i=0;$i<length($inputFASTA)-$k+1;$i++) #Build every kmer with a mutation on the middle base
   {
-    my $refNuc;
-    my $ref_kmer = substr ($inputFASTA, $i, $k);
-    if ($kIsOdd){ #If k is an even number, then we must do this... If we don't the wrong base will be changed.
-      $refNuc= substr($ref_kmer, $kDiv2, 1);
-    }
-    else{
-      $refNuc=substr($ref_kmer, $kDiv2-1, 1);
-    }
-    $beenReverse=0;
+    $beenReverse  = 0;
+    my $ref_kmer  = substr ($inputFASTA, $i, $k);
+    my $refNuc    = $kIsOdd ? substr($ref_kmer, $kDiv2, 1) : substr($ref_kmer, $kDiv2-1, 1);
+    my $mut_pos   = $kIsOdd ? int($i+$kDiv2+$limInf) : int($i+$kDiv2-1+$limInf);
 
-    if (!$disable_RC){ #Make the RC of the RefKMer, and use it if he is lower than the ref as a string.
-      my  $reverseKmer = reverseComplement($ref_kmer);
-      if ($ref_kmer gt $reverseKmer){
-        $ref_kmer = $reverseKmer;
-        $beenReverse=1;
-      }
-    }
-    if (!$beenReverse && $kIsOdd){ #Theses 3 conditions will choose which base will be the reference one depending on k and if ref_kmer has been reversed or not.
-      $refNucReverse=substr($ref_kmer, $kDiv2, 1);
-    }
-    elsif(!$beenReverse && !$kIsOdd){
+    # Choose between k-mer and its revcomp using lexicographic order
+    ($ref_kmer, $beenReverse) = canonicalKmer($ref_kmer)  unless $disable_RC;
+
+    # Mute the right nucleotide
+    if(!$beenReverse && !$kIsOdd) {
       $refNucReverse=substr($ref_kmer, $kDiv2-1, 1);
-    }
-    else{
+    } else {
       $refNucReverse=substr($ref_kmer, $kDiv2, 1); #Same as the if... 
     }
-    my $mut_pos = $kIsOdd ? int($i+$kDiv2+$limInf) : int($i+$kDiv2-1+$limInf);
+
     if(!exists($listingKmer{$ref_kmer})) {
       foreach my $nuc ("A", "G", "T", "C") {
         if($nuc ne $refNucReverse){ 
+
           # Create a mutation on the middle of the k-mer
-          if (!$beenReverse && $kIsOdd){
-            $kmer = mutationSimple($ref_kmer,$kDiv2, $nuc);
-          }
-          elsif(!$kIsOdd && !$beenReverse){
+          if(!$kIsOdd && !$beenReverse){
             $kmer = mutationSimple($ref_kmer, $kDiv2-1, $nuc);
           }
           else{
@@ -317,10 +303,7 @@ foreach my $interval (@merged_intervals) {
 
           # We check whether the mutated k-mer or its revcomp is smaller
           # even if this have very low chance to happen.
-          my $reverseKmer = reverseComplement($kmer);
-          if ($kmer gt $reverseKmer){
-            $kmer = $reverseKmer;
-          }
+          $kmer = canonicalKmer($kmer);
 
           # FIXME we should check that the mutated k-mer is not already in the hash, otherwise
           # their is a collision that need to be handled
@@ -331,12 +314,13 @@ foreach my $interval (@merged_intervals) {
           $listingKmer{$kmer}{'count'}    = 0;
           $listingKmer{$kmer}{'chromo'}   = $chromosome;
           $listingKmer{$kmer}{'ref_kmer'} = $ref_kmer;
-          $listingKmer{$kmer}{'mut'} = $beenReverse ? reverseComplement($nuc) : $nuc;
+          $listingKmer{$kmer}{'mut'}      = $beenReverse ? reverseComplement($nuc) : $nuc;
           $listingKmer{$kmer}{'position'} = $mut_pos;
-        }
-        else { #Will store the total number of kmer mapped derived from the ref.
-          $listingKmer{$ref_kmer}{'count'}=0;
-          $listingKmer{$ref_kmer}{'ref_nuc'}=$refNuc;
+          
+        #Will store the total number of kmer mapped derived from the ref.
+        } else { 
+          $listingKmer{$ref_kmer}{'count'}    = 0;
+          $listingKmer{$ref_kmer}{'ref_nuc'}  = $refNuc;
         }
       }
     }
@@ -355,25 +339,26 @@ foreach my $file (@FASTQ_files) {
   open(my $inputFASTQ, '<', $file) or die("open $!");
   while (<$inputFASTQ>){
     my $ligneQ = $_;
-    if ($.%4 == 2){ #Read selection.
+
+    # select only sequences lines
+    if ($.%4 == 2){
       $nbRead++;
       chomp($ligneQ);
-      for (my $i=0;$i<=length($ligneQ)-$k;$i++){ #Build the Kmer of the selected read.
+      for (my $i=0;$i<=length($ligneQ)-$k;$i++){
         $kmerRead = substr($ligneQ, $i, $k);
-        if (!$disable_RC){#Reverse Complement
-          my $kmerReverseRead = reverseComplement($kmerRead);
-          if ($kmerRead gt $kmerReverseRead){
-            $kmerRead = $kmerReverseRead;
-          }
-        }
-        if (defined($listingKmer{$kmerRead})){ #If this part of the read can be found somwhere in the hash.
+        $kmerRead = canonicalKmer($kmerRead) unless $disable_RC;
+
+        # If this k-mer is defiened on the mutated k-mer dictionnary
+        if(defined $listingKmer{$kmerRead}) {
           $listingKmer{$kmerRead}{'count'}++;
-          if (defined($listingKmer{$kmerRead}{'ref_kmer'})){ #If the Kmer has a reference kmer or a position, it means that it's a mutated one. So we will increment the ref in order to have an access to the DP.
+
+          # Update the reference k-mer, is this is a mutated k-mer
+          if(defined $listingKmer{$kmerRead}{'ref_kmer'}) {
             $listingKmer{$listingKmer{$kmerRead}{'ref_kmer'}}{'count'}++;
           }
         }
       }
-      if ($nbRead%50000==0){#Just print litle stars, again.
+      if ($nbRead%50000==0){
         print STDERR "*";
       }
     }
@@ -459,4 +444,15 @@ sub reverseComplement #Take a DNA sequence as input and output his reverse compl
   $seq =~ tr /atcgATCG/tagcTAGC/;
   $seq = reverse($seq);
   return $seq 
+}
+
+sub canonicalKmer {
+  my $kmer = shift;
+  my $beenReverse = 0;
+  my  $reverseKmer = reverseComplement($kmer);
+  if ($kmer gt $reverseKmer){
+    $kmer         = $reverseKmer;
+    $beenReverse  = 1;
+  }
+  return ($beenReverse, $kmer);
 }
