@@ -280,7 +280,7 @@ foreach my $interval (@merged_intervals) {
     my $mut_pos   = $kIsOdd ? int($i+$kDiv2+$limInf) : int($i+$kDiv2-1+$limInf);
 
     # Choose between k-mer and its revcomp using lexicographic order
-    ($ref_kmer, $beenReverse) = canonicalKmer($ref_kmer)  unless $disable_RC;
+    ($beenReverse, $ref_kmer) = canonicalKmer($ref_kmer)  unless $disable_RC;
 
     # Mute the right nucleotide
     if(!$beenReverse && !$kIsOdd) {
