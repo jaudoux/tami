@@ -1,0 +1,6 @@
+- Reduce memory footprint
+- support gene list as input
+- add an option to only index exonic sequences (and splice sites) instead of the whole genomic sequence
+- Support multi-sample analysis
+- support multi-sample VCF
+- Connect to Ensembl REST API for annotation
