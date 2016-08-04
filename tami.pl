@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use utf8;
 use Getopt::Long;
+use File::Temp;
 use REST::Client;
 use JSON;
 use Pod::Usage;
@@ -72,6 +73,7 @@ input filter:
 =cut
 
 my ($help, $man, $verbose);
+my $tmp_dir = ".";
 my $output_fileName;
 my $geneName='';
 my $inputFASTA='';
@@ -257,8 +259,9 @@ my $beenReverse=0;
 my $refNucReverse;
 my $kIsOdd=$k%2;
 my $kmer;
-foreach my $interval (@merged_intervals) {
-  
+my $mutated_kmer_file = File::Temp->new(DIR => $tmp_dir);
+
+foreach my $interval (sort { $a->{chr} cmp $b->{chr} || $a->{start} <=> $b->{start} } @merged_intervals) {
   my $chromosome = $interval->{chr};
   my $limInf     = $interval->{start};
   my $limSup     = $interval->{end};
@@ -279,12 +282,15 @@ foreach my $interval (@merged_intervals) {
     $beenReverse  = 0;
     my $ref_kmer;
     my $mut_pos;
+    # Case of the left extremity where the mutated position is not the center of the k-mer
     if($i < $kDiv2) {
       $ref_kmer = substr($inputFASTA, 0, $k);
       $mut_pos  = $i;
+    # Case of the right extremity where the mutated position is not the center of the k-mer
     } elsif($i >= $seq_length - $kDiv2) {
       $ref_kmer = substr($inputFASTA, -$k);
       $mut_pos  = $k + $i - $seq_length;
+    # Default case, the mutated position is the center of the k-mer
     } else {
       $ref_kmer = substr($inputFASTA, $i - $kDiv2, $k);
       $mut_pos  = $kDiv2;
@@ -310,39 +316,48 @@ foreach my $interval (@merged_intervals) {
           next;
         }
         
-        # FIXME we should store all these informations in a file to avoid having a huge amount
-        # of memory used for nothing
-        $listingKmer{$kmer}{'count'}    = 0;
-        $listingKmer{$kmer}{'chromo'}   = $chromosome;
-        $listingKmer{$kmer}{'ref_kmer'} = $canonical_ref_kmer;
-        $listingKmer{$kmer}{'mut'}      = $nuc;
-        $listingKmer{$kmer}{'position'} = $limInf + $i;
+        $listingKmer{$kmer}  = 0;
 
+        # FIXME use pack/upack instead of simple tabulated file
+        print $mutated_kmer_file join("\t", $kmer, $canonical_ref_kmer, $chromosome, ($limInf + $i), $refNuc, $nuc),"\n";
         
       #Will store the total number of kmer mapped derived from the ref.
       } else { 
-        $listingKmer{$canonical_ref_kmer}{'count'}    = 0;
-        $listingKmer{$canonical_ref_kmer}{'ref_nuc'}  = $refNuc;
+        # we set the value to -1, in order to mark this k-mer as a reference k-mer
+        # that is used to create the derived k-mer from the mutated k-mers
+        $listingKmer{$canonical_ref_kmer} = -1;
       }
     }
   }
 }
 
+close $mutated_kmer_file;
+
+my $derived_kmer_file = File::Temp->new(DIR => $tmp_dir);
+
 # Add all derived k-mer with one more mutation
 foreach my $kmer (keys %listingKmer) {
-  next if !defined $listingKmer{$kmer}{'ref_kmer'};
-  for(my $j = 0; $j < $k; $j++) {
-    my $refNuc = substr($kmer, $j, 1);
-    foreach my $nuc ("A", "G", "T", "C") {
-      if($nuc ne $refNuc) { 
-        my $derived_kmer = canonicalKmer(mutationSimple($kmer, $j, $nuc));
-        if(!exists $listingKmer{$derived_kmer}) {
-          $listingKmer{$derived_kmer} = $listingKmer{$kmer};
+  # This is a mutated k-mer
+  if($listingKmer{$kmer} == 0) {
+    for(my $j = 0; $j < $k; $j++) {
+      my $refNuc = substr($kmer, $j, 1);
+      foreach my $nuc ("A", "G", "T", "C") {
+        if($nuc ne $refNuc) { 
+          my $derived_kmer = canonicalKmer(mutationSimple($kmer, $j, $nuc));
+          if(!exists $listingKmer{$derived_kmer}) {
+            $listingKmer{$derived_kmer} = 0;
+            print $derived_kmer_file join("\t", $derived_kmer, $kmer),"\n";
+          }
         }
       }
     }
+  # This is a reference k-mer
+  } else {
+    $listingKmer{$kmer} = 0;
   }
 }
+
+close $derived_kmer_file;
 
 # #############################################################################
 # STEP 3 : QUANTIFY ABUNDANCE OF MUTATED K-MER
@@ -367,12 +382,7 @@ foreach my $file (@FASTQ_files) {
 
         # If this k-mer is defiened on the mutated k-mer dictionnary
         if(defined $listingKmer{$kmerRead}) {
-          $listingKmer{$kmerRead}{'count'}++;
-
-          # Update the reference k-mer, is this is a mutated k-mer
-          if(defined $listingKmer{$kmerRead}{'ref_kmer'}) {
-            $listingKmer{$listingKmer{$kmerRead}{'ref_kmer'}}{'count'}++;
-          }
+          $listingKmer{$kmerRead}++;
         }
       }
       if ($nbRead%50000==0){
@@ -383,8 +393,29 @@ foreach my $file (@FASTQ_files) {
   close ($inputFASTQ);
 }
 
-print STDERR "\n$nbRead reads were present.\n\n";
+# Update the mutated k-mer count with derived k-mer counts
+{
+  open(my $fh, "<", $derived_kmer_file->filename) or die("Cannot open ".$derived_kmer_file->filename);
+  while(<$fh>) {
+    chomp;
+    my ($kmer, $ref_kmer) = split("\t",$_,3);
+    $listingKmer{$ref_kmer} += $listingKmer{$kmer};
+  }
+  close $fh;
+}
 
+# Update reference k-mer count with mutated k-mer counts
+{
+  open(my $fh, "<", $mutated_kmer_file->filename) or die("Cannot open ".$mutated_kmer_file->filename);
+  while(<$fh>) {
+    chomp;
+    my ($kmer, $ref_kmer) = split("\t",$_,3);
+    $listingKmer{$ref_kmer} += $listingKmer{$kmer};
+  }
+  close $fh;
+}
+
+print STDERR "\n$nbRead reads were present.\n\n";
 
 
 # #############################################################################
@@ -411,27 +442,22 @@ print $outputVCF '##INFO=<ID=AF,Number=A,Type=Float,',
                  'Description="Estimated allele frequency in the range (0,1]">',"\n";
 print $outputVCF "#".join("\t",qw(CHROM POS ID REF ALT QUAL FILTER INFO)),"\n";
 
-# Get kmers sorted by chr and positions
-my @sorted_kmers = sort { $listingKmer{$a}{'chromo'} cmp $listingKmer{$b}{'chromo'} || 
-                          $listingKmer{$a}->{'position'} <=> $listingKmer{$b}->{'position'} ||
-                          $listingKmer{$a}->{'mut'} cmp $listingKmer{$b}{'mut'}
-                  } grep { defined $listingKmer{$_}{'ref_kmer'} &&
-                           $listingKmer{$_}{'count'} >= $min_alternate_count
-                  } keys %listingKmer;
-
 # Print VCF records
-my $prev_mutation = "";
-foreach my $key (@sorted_kmers){
-  my $mutation = join("@",$listingKmer{$key}{'chromo'},
-    $listingKmer{$key}{'position'},
-    $listingKmer{$key}{'mut'},
-  );
-  next if $mutation eq $prev_mutation;
-  $prev_mutation = $mutation;
+open(my $fh, "<", $mutated_kmer_file->filename) or die("Cannot open $mutated_kmer_file");
+while(<$fh>) {
+  chomp;
+  my ($kmer, $ref_kmer, $chr, $pos, $ref, $alt) = split("\t",$_);
+
+  # We have reached the end of the mutated k-mers, this remaining
+  # ones are derived k-mers
+  last if !defined $chr;
+
+  my $AC = $listingKmer{$kmer};
+  next if $AC < $min_alternate_count;
+
   # Compute stats
-  my $refNuc = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'ref_nuc'};
-  my $DP = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'count'};
-  my $AF = (($listingKmer{$key}{'count'})/($DP));
+  my $DP = $listingKmer{$ref_kmer};
+  my $AF = $AC / $DP;
 
   # Apply filters
   next if $AF < $min_alternate_fraction;
@@ -440,14 +466,15 @@ foreach my $key (@sorted_kmers){
 
   # Print VCF line
   print $outputVCF join("\t",
-    $listingKmer{$key}{'chromo'},
-    $listingKmer{$key}{'position'},
-    $key,
-    $refNuc,
-    $listingKmer{$key}{'mut'},
-    join(";","DP=$DP","AF=$AF","AC=$listingKmer{$key}{'count'}")
+    $chr,
+    $pos,
+    $kmer,
+    $ref,
+    $alt,
+    join(";","DP=$DP","AF=$AF","AC=$AC")
   ),"\n";
 }
+close $fh;
 print STDERR "\n\n --- END --- \n\n";
 
 
