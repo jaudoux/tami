@@ -225,7 +225,7 @@ if ($geneName){
     # remove possible "chr" prefix
     $chr =~ s/^chr//i;
     # FIXME BED are half-open intervals, we should do $end-1
-    push @genomic_intervals, { chr => $chr, start => $start, end => $end };
+    push @genomic_intervals, { chr => $chr, start => $start + 1, end => $end };
   }
 }
 
@@ -252,7 +252,7 @@ push @merged_intervals, $curr_interval;
 # STEP 2 : MUTATED K-MER DICTIONNARY
 #
 # Create the mutated k-mer dictionnary from the merged intervals
-my $kDiv2=$k/2;
+my $kDiv2=int($k/2);
 my $beenReverse=0;
 my $refNucReverse;
 my $kIsOdd=$k%2;
@@ -272,56 +272,56 @@ foreach my $interval (@merged_intervals) {
   #Build a hash with every kmer with all the possible mutations on the midle base.
   #print STDERR ("Building the Kmer list...");
 
-  for (my $i=0;$i<length($inputFASTA)-$k+1;$i++) #Build every kmer with a mutation on the middle base
+  my $seq_length = length $inputFASTA;
+
+  for (my $i=0;$i<length($inputFASTA);$i++) #Build every kmer with a mutation on the middle base
   {
     $beenReverse  = 0;
-    my $ref_kmer  = substr ($inputFASTA, $i, $k);
-    my $refNuc    = $kIsOdd ? substr($ref_kmer, $kDiv2, 1) : substr($ref_kmer, $kDiv2-1, 1);
-    my $mut_pos   = $kIsOdd ? int($i+$kDiv2+$limInf) : int($i+$kDiv2-1+$limInf);
-
-    # Choose between k-mer and its revcomp using lexicographic order
-    ($beenReverse, $ref_kmer) = canonicalKmer($ref_kmer)  unless $disable_RC;
-
-    # Mute the right nucleotide
-    if(!$beenReverse && !$kIsOdd) {
-      $refNucReverse=substr($ref_kmer, $kDiv2-1, 1);
+    my $ref_kmer;
+    my $mut_pos;
+    if($i < $kDiv2) {
+      $ref_kmer = substr($inputFASTA, 0, $k);
+      $mut_pos  = $i;
+    } elsif($i >= $seq_length - $kDiv2) {
+      $ref_kmer = substr($inputFASTA, -$k);
+      $mut_pos  = $k + $i - $seq_length;
     } else {
-      $refNucReverse=substr($ref_kmer, $kDiv2, 1); #Same as the if... 
+      $ref_kmer = substr($inputFASTA, $i - $kDiv2, $k);
+      $mut_pos  = $kDiv2;
     }
 
-    if(!exists($listingKmer{$ref_kmer})) {
-      foreach my $nuc ("A", "G", "T", "C") {
-        if($nuc ne $refNucReverse){ 
+    my $refNuc    = substr($ref_kmer, $mut_pos, 1);
+    my $canonical_ref_kmer = canonicalKmer($ref_kmer);
 
-          # Create a mutation on the middle of the k-mer
-          if(!$kIsOdd && !$beenReverse){
-            $kmer = mutationSimple($ref_kmer, $kDiv2-1, $nuc);
-          }
-          else{
-            $kmer = mutationSimple($ref_kmer, $kDiv2, $nuc);
-          }
+    foreach my $nuc ("A", "G", "T", "C") {
+      if($nuc ne $refNuc){ 
 
-          # We check whether the mutated k-mer or its revcomp is smaller
-          # even if this have very low chance to happen.
-          $kmer = canonicalKmer($kmer);
+        # Create a mutation on the middle of the k-mer
+        $kmer = mutationSimple($ref_kmer, $mut_pos, $nuc);
 
-          # FIXME we should check that the mutated k-mer is not already in the hash, otherwise
-          # their is a collision that need to be handled
-          next if exists $listingKmer{$kmer};
-          
-          # FIXME we should store all these informations in a file to avoid having a huge amount
-          # of memory used for nothing
-          $listingKmer{$kmer}{'count'}    = 0;
-          $listingKmer{$kmer}{'chromo'}   = $chromosome;
-          $listingKmer{$kmer}{'ref_kmer'} = $ref_kmer;
-          $listingKmer{$kmer}{'mut'}      = $beenReverse ? reverseComplement($nuc) : $nuc;
-          $listingKmer{$kmer}{'position'} = $mut_pos;
-          
-        #Will store the total number of kmer mapped derived from the ref.
-        } else { 
-          $listingKmer{$ref_kmer}{'count'}    = 0;
-          $listingKmer{$ref_kmer}{'ref_nuc'}  = $refNuc;
+        # We check whether the mutated k-mer or its revcomp is smaller
+        # even if this have very low chance to happen.
+        $kmer = canonicalKmer($kmer);
+
+        # FIXME we should check that the mutated k-mer is not already in the hash, otherwise
+        # their is a collision that need to be handled
+        if(exists $listingKmer{$kmer}) {
+          print STDERR "Dupliacted entry, next...\n";
+          next;
         }
+        
+        # FIXME we should store all these informations in a file to avoid having a huge amount
+        # of memory used for nothing
+        $listingKmer{$kmer}{'count'}    = 0;
+        $listingKmer{$kmer}{'chromo'}   = $chromosome;
+        $listingKmer{$kmer}{'ref_kmer'} = $canonical_ref_kmer;
+        $listingKmer{$kmer}{'mut'}      = $nuc;
+        $listingKmer{$kmer}{'position'} = $limInf + $i;
+        
+      #Will store the total number of kmer mapped derived from the ref.
+      } else { 
+        $listingKmer{$canonical_ref_kmer}{'count'}    = 0;
+        $listingKmer{$canonical_ref_kmer}{'ref_nuc'}  = $refNuc;
       }
     }
   }
