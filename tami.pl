@@ -317,11 +317,28 @@ foreach my $interval (@merged_intervals) {
         $listingKmer{$kmer}{'ref_kmer'} = $canonical_ref_kmer;
         $listingKmer{$kmer}{'mut'}      = $nuc;
         $listingKmer{$kmer}{'position'} = $limInf + $i;
+
         
       #Will store the total number of kmer mapped derived from the ref.
       } else { 
         $listingKmer{$canonical_ref_kmer}{'count'}    = 0;
         $listingKmer{$canonical_ref_kmer}{'ref_nuc'}  = $refNuc;
+      }
+    }
+  }
+}
+
+# Add all derived k-mer with one more mutation
+foreach my $kmer (keys %listingKmer) {
+  next if !defined $listingKmer{$kmer}{'ref_kmer'};
+  for(my $j = 0; $j < $k; $j++) {
+    my $refNuc = substr($kmer, $j, 1);
+    foreach my $nuc ("A", "G", "T", "C") {
+      if($nuc ne $refNuc) { 
+        my $derived_kmer = canonicalKmer(mutationSimple($kmer, $j, $nuc));
+        if(!exists $listingKmer{$derived_kmer}) {
+          $listingKmer{$derived_kmer} = $listingKmer{$kmer};
+        }
       }
     }
   }
@@ -396,13 +413,21 @@ print $outputVCF "#".join("\t",qw(CHROM POS ID REF ALT QUAL FILTER INFO)),"\n";
 
 # Get kmers sorted by chr and positions
 my @sorted_kmers = sort { $listingKmer{$a}{'chromo'} cmp $listingKmer{$b}{'chromo'} || 
-                          $listingKmer{$a}->{'position'} <=> $listingKmer{$b}->{'position'}
+                          $listingKmer{$a}->{'position'} <=> $listingKmer{$b}->{'position'} ||
+                          $listingKmer{$a}->{'mut'} cmp $listingKmer{$b}{'mut'}
                   } grep { defined $listingKmer{$_}{'ref_kmer'} &&
                            $listingKmer{$_}{'count'} >= $min_alternate_count
                   } keys %listingKmer;
 
 # Print VCF records
+my $prev_mutation = "";
 foreach my $key (@sorted_kmers){
+  my $mutation = join("@",$listingKmer{$key}{'chromo'},
+    $listingKmer{$key}{'position'},
+    $listingKmer{$key}{'mut'},
+  );
+  next if $mutation eq $prev_mutation;
+  $prev_mutation = $mutation;
   # Compute stats
   my $refNuc = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'ref_nuc'};
   my $DP = $listingKmer{$listingKmer{$key}{'ref_kmer'}}{'count'};
