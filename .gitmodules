@@ -1,0 +1,3 @@
+[submodule "klib"]
+    path = c-implementation/klib
+    url = git@github.com:attractivechaos/klib.git
