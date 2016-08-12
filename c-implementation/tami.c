@@ -16,7 +16,7 @@ KHASH_MAP_INIT_INT64(kmers, uint32_t)
 #include "api.h"
 #include "dna.h"
 
-#define TAMI_VERSION "0.0.2"
+#define TAMI_VERSION "0.0.3"
 
 typedef struct {
   char *chr;
@@ -110,14 +110,14 @@ int main(int argc, char *argv[]) {
   khash_t(kmers) *h = kh_init(kmers);
 
 
-  int use_derived_kmers = 1;
+  int use_derived_kmers = 0;
   float min_alternate_fraction = 0.2;
   int min_alternate_count = 3;
   int min_coverage = 10;
   int max_coverage = -1;
   int k_length      = 30;
   int k_middle      = k_length / 2;
-  int debug = 1;
+  int debug = 0;
   int version = 0;
 
 
@@ -129,35 +129,50 @@ int main(int argc, char *argv[]) {
       case 'm': min_coverage = atoi(optarg); break;
       case 'M': max_coverage = atoi(optarg); break;
       case 'k': k_length = atoi(optarg); break;
-      case 'd': use_derived_kmers = 0; break;
+      case 's': use_derived_kmers = 1; break;
       case 'v': version = 1; break;
+      case 'd': debug = 1; break;
 		}
 	}
-  
+
   if(version) {
     fprintf(stderr, "tami v%s\n",TAMI_VERSION);
     return 1;
-  } else if (optind == argc) {
+  } else if (optind + 1 >= argc) {
 		fprintf(stderr, "\n");
 		fprintf(stderr, "Usage:   tami [options] <in.bed> <in.fq>\n\n");
 		fprintf(stderr, "Options: -F FLOAT  min alternate allele frequency [%.2f]\n", min_alternate_fraction);
-    fprintf(stderr, "         -C INT    min alternate allele count [%d]\n", min_alternate_count);
+    fprintf(stderr, "         -C INT    min alternate allele count (min_value: 1)[%d]\n", min_alternate_count);
     fprintf(stderr, "         -m INT    min coverage [%d]\n", min_coverage);
-    fprintf(stderr, "         -M INT    max coverage [%d]\n", max_coverage);
+    fprintf(stderr, "         -M INT    max coverage (min_value: 1)[%d]\n", max_coverage);
     fprintf(stderr, "         -k INT    length of k-mers (max_value: 32) [%d]\n", k_length);
-    fprintf(stderr, "         -d        only able 1 mutation per-kmer\n");
+    fprintf(stderr, "         -s        sensitive mode (able 2 mutation per-kmer)\n");
+    fprintf(stderr, "                   Warning : important memory overload and possible loss of accuracy,\n");
+    fprintf(stderr, "                             this option is only adviced for amplicon sequencing.\n");
     fprintf(stderr, "         -v        print tami version number\n");
+    fprintf(stderr, "         -d        debug mode\n");
 		fprintf(stderr, "\n");
 		return 1;
 	}
 
-
-
   char *bed_file    = argv[optind++];
+
+  // verify Options
+  if(min_coverage < 1) {
+    fprintf(stderr, "Invalid value (%d) for min_coverage (-m option).\n", min_coverage);
+    return 1;
+  }
+  if(min_alternate_count < 1) {
+    fprintf(stderr, "Invalid value (%d) for min_alternate_count (-C option).\n", min_coverage);
+    return 1;
+  }
+  if(k_length > 32 || k_length < 1) {
+    fprintf(stderr, "Invalid value (%d) for k_length (-k option).\n", k_length);
+    return 1;
+  }
 
   if(debug) {
     fprintf(stderr, "Bed file is: %s\n",bed_file);
-    //fprintf(stderr, "FASTQ file is: %s\n",fastq_file);
     fprintf(stderr, "min_alternate_count (C): %d\n",min_alternate_count);
     fprintf(stderr, "min_alternate_fraction (F): %f\n",min_alternate_fraction);
   }
@@ -194,7 +209,8 @@ int main(int argc, char *argv[]) {
             interval->end   = end;
             kv_push(interval_t*,interval_array,interval);
             //interval = NULL;
-            //fprintf(stderr, "Read interval : %s:%d..%d\n", interval->chr,interval->start,interval->end);
+            if(debug)
+              fprintf(stderr, "Read interval : %s:%d..%d\n", interval->chr,interval->start,interval->end);
           }
         }
       }
@@ -245,7 +261,8 @@ int main(int argc, char *argv[]) {
     interval = kv_A(interval_array,i);
 
     char *seq = get_sequence(interval->chr, interval->start, interval->end);
-    //fprintf(stderr, ">%s:%d..%d\n%s\n", interval->chr, interval->start, interval->end,seq);
+    if(debug)
+      fprintf(stderr, ">%s:%d..%d\n%s\n", interval->chr, interval->start, interval->end,seq);
 
     size_t seq_length = strlen(seq);
 
@@ -270,26 +287,26 @@ int main(int argc, char *argv[]) {
       ref_kmer = dna_to_int(&seq[ref_kmer_pos],k_length,1);
       memmove(kmer, &seq[ref_kmer_pos], sizeof kmer);
 
-      if(pos == 27581443) {
-        fprintf(stderr, "ref_seq  : %s\n", seq);
-        fprintf(stderr, "ref_kmer : %s\n", kmer);
-        fprintf(stderr, "ref_nucl : %c\n", ref_nuc);
-      }
+      // if(pos == 27581443) {
+      //   fprintf(stderr, "ref_seq  : %s\n", seq);
+      //   fprintf(stderr, "ref_kmer : %s\n", kmer);
+      //   fprintf(stderr, "ref_nucl : %c\n", ref_nuc);
+      // }
 
 
       for(int p = 0; p < NB_NUCLEOTIDES; p++) {
         if(NUCLEOTIDES[p] != ref_nuc) {
           kmer[mut_pos] = NUCLEOTIDES[p];
-          if(pos == 27581443) {
-            fprintf(stderr, "mut_kmer %c => %c (%d): %s\n", ref_nuc, NUCLEOTIDES[p], mut_pos, kmer);
-          }
+          // if(pos == 27581443) {
+          //   fprintf(stderr, "mut_kmer %c => %c (%d): %s\n", ref_nuc, NUCLEOTIDES[p], mut_pos, kmer);
+          // }
           //fprintf(stderr, "mut_kmer :       %s\n", kmer);
           mut_kmer = dna_to_int(kmer,k_length,1);
 
-          if(pos == 27581443) {
-            int_to_dna(mut_kmer,k_length,kmer2);
-            fprintf(stderr, "canonical_kmer : %s\n", kmer2);
-          }
+          // if(pos == 27581443) {
+          //   int_to_dna(mut_kmer,k_length,kmer2);
+          //   fprintf(stderr, "canonical_kmer : %s\n", kmer2);
+          // }
 
           if(kh_get(kmers, h, mut_kmer) == kh_end(h)) {
             k = kh_put(kmers, h, mut_kmer, &ret);
@@ -446,14 +463,14 @@ int main(int argc, char *argv[]) {
       if(k != kh_end(h) && k2 != kh_end(h)) {
         int AC = kh_val(h,k2);
         int DP = kh_val(h,k);
-        float AF = (float) AC / DP;
-        if(kmer_mut_struct.pos == 27581443) {
-          fprintf(stderr, "%s\t%d\t%s\t%c\t%c\tDP=%d;AF=%.2f;AC=%d\n", kmer_mut_struct.chr, kmer_mut_struct.pos, kmer, kmer_mut_struct.refn, kmer_mut_struct.mutn,DP,AF,AC);
-        }
+        // if(kmer_mut_struct.pos == 27581443) {
+        //   fprintf(stderr, "%s\t%d\t%s\t%c\t%c\tDP=%d;AF=%.2f;AC=%d\n", kmer_mut_struct.chr, kmer_mut_struct.pos, kmer, kmer_mut_struct.refn, kmer_mut_struct.mutn,DP,AF,AC);
+        // }
         if(AC < min_alternate_count)
           continue;
         if(DP < min_coverage)
           continue;
+        float AF = (float) AC / DP;
         if(AF < min_alternate_fraction)
           continue;
         if(max_coverage > 0 && DP > max_coverage)
