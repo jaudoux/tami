@@ -122,7 +122,7 @@ int main(int argc, char *argv[]) {
 
 
   int c;
-  while ((c = getopt(argc, argv, "dvF:C:m:M:d:k:")) >= 0) {
+  while ((c = getopt(argc, argv, "dsvF:C:m:M:d:k:")) >= 0) {
 		switch (c) {
 			case 'F': min_alternate_fraction = atof(optarg); break;
       case 'C': min_alternate_count = atoi(optarg); break;
