@@ -16,6 +16,8 @@ KHASH_MAP_INIT_INT64(kmers, uint32_t)
 #include "api.h"
 #include "dna.h"
 
+#define TAMI_VERSION "0.0.2"
+
 typedef struct {
   char *chr;
   int start, end;
@@ -52,16 +54,30 @@ int write_kmer_mut(kmer_mut_t *kmut, FILE *fp) {
 
 int read_kmer_mut(kmer_mut_t *kmut, FILE *fp) {
   //fread(&kmut->mute_kmer,    sizeof(uint64_t),     1, kmer_file);
-  size_t chr_l;
-  fread(&kmut->mutk,   sizeof(kmut->mutk), 1, fp);
-  fread(&kmut->refk,   sizeof(kmut->refk), 1, fp);
-  fread(&chr_l,        sizeof(size_t),     1, fp);
-  kmut->chr = realloc(kmut->chr, sizeof(char) * (chr_l + 1));
-  kmut->chr[chr_l] = '\0';
-  fread(kmut->chr,     sizeof(char),   chr_l, fp);
-  fread(&kmut->pos,    sizeof(kmut->pos),  1, fp);
-  fread(&kmut->mutn,   sizeof(kmut->mutn), 1, fp);
-  return fread(&kmut->refn,   sizeof(kmut->refn), 1, fp);
+  size_t chr_l, r;
+  r = fread(&kmut->mutk,   sizeof(kmut->mutk), 1, fp);
+  if(r == 1) r = fread(&kmut->refk,   sizeof(kmut->refk), 1, fp);
+  else return 0;
+  if(r == 1) r = fread(&chr_l,        sizeof(size_t),     1, fp);
+  else return 0;
+  if(r == 1) {
+    if(kmut->chr)
+      kmut->chr = realloc(kmut->chr, sizeof(char) * (chr_l + 1));
+    else
+      kmut->chr = malloc(sizeof(char) * (chr_l + 1));
+    kmut->chr[chr_l] = '\0';
+    r = fread(kmut->chr,     sizeof(char),   chr_l, fp);
+  } else {
+    return 0;
+  }
+  if(r == chr_l) r = fread(&kmut->pos,    sizeof(kmut->pos),  1, fp);
+  else return 0;
+  if(r == 1) r = fread(&kmut->mutn,   sizeof(kmut->mutn), 1, fp);
+  else return 0;
+  if(r == 1) r = fread(&kmut->refn,   sizeof(kmut->refn), 1, fp);
+  else return 0;
+  if(r == 1) return 1;
+  else return 0;
 }
 
 typedef struct {
@@ -74,8 +90,13 @@ int write_kmer_alt(kmer_alt_t *kalt, FILE *fp) {
 }
 
 int read_kmer_alt(kmer_alt_t *kalt, FILE *fp) {
-  fread(&kalt->altk,   sizeof(kalt->altk), 1, fp);
-  return fread(&kalt->refk,   sizeof(kalt->refk), 1, fp);
+  size_t r;
+  r = fread(&kalt->altk,   sizeof(kalt->altk), 1, fp);
+  if(r == 1) r = fread(&kalt->refk,   sizeof(kalt->refk), 1, fp);
+  else return 0;
+  if(r == 1) return 1;
+  else return 0;
+  //return fread(&kalt->refk,   sizeof(kalt->refk), 1, fp);
 }
 
 int main(int argc, char *argv[]) {
@@ -96,20 +117,27 @@ int main(int argc, char *argv[]) {
   int max_coverage = -1;
   int k_length      = 30;
   int k_middle      = k_length / 2;
+  int debug = 1;
+  int version = 0;
 
 
   int c;
-  while ((c = getopt(argc, argv, "fF:")) >= 0) {
+  while ((c = getopt(argc, argv, "dvF:C:m:M:d:k:")) >= 0) {
 		switch (c) {
 			case 'F': min_alternate_fraction = atof(optarg); break;
       case 'C': min_alternate_count = atoi(optarg); break;
       case 'm': min_coverage = atoi(optarg); break;
       case 'M': max_coverage = atoi(optarg); break;
-      case 'd': use_derived_kmers = 0; break;
       case 'k': k_length = atoi(optarg); break;
+      case 'd': use_derived_kmers = 0; break;
+      case 'v': version = 1; break;
 		}
 	}
-	if (optind == argc) {
+  
+  if(version) {
+    fprintf(stderr, "tami v%s\n",TAMI_VERSION);
+    return 1;
+  } else if (optind == argc) {
 		fprintf(stderr, "\n");
 		fprintf(stderr, "Usage:   tami [options] <in.bed> <in.fq>\n\n");
 		fprintf(stderr, "Options: -F FLOAT  min alternate allele frequency [%.2f]\n", min_alternate_fraction);
@@ -118,17 +146,24 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "         -M INT    max coverage [%d]\n", max_coverage);
     fprintf(stderr, "         -k INT    length of k-mers (max_value: 32) [%d]\n", k_length);
     fprintf(stderr, "         -d        only able 1 mutation per-kmer\n");
+    fprintf(stderr, "         -v        print tami version number\n");
 		fprintf(stderr, "\n");
 		return 1;
 	}
 
-  char *bed_file    = argv[optind++];
-  char *fastq_file  = argv[optind];
 
-  //fprintf(stderr, "Bed file is: %s\n",bed_file);
-  //fprintf(stderr, "FASTQ file is: %s\n",fastq_file);
+
+  char *bed_file    = argv[optind++];
+
+  if(debug) {
+    fprintf(stderr, "Bed file is: %s\n",bed_file);
+    //fprintf(stderr, "FASTQ file is: %s\n",fastq_file);
+    fprintf(stderr, "min_alternate_count (C): %d\n",min_alternate_count);
+    fprintf(stderr, "min_alternate_fraction (F): %f\n",min_alternate_fraction);
+  }
 
   /* READ THE BED FILE and load intervals*/
+  fprintf(stderr, "Reading BED file...\n");
 
   gzFile fp;
 	kstream_t *ks;
@@ -155,7 +190,7 @@ int main(int argc, char *argv[]) {
             // create a new interval
             interval = (interval_t*)malloc(sizeof(interval_t));
             interval->chr   = ks_release(chr);
-            interval->start = start;
+            interval->start = start + 1; // bed files have 0-based semi-opend [) intervals
             interval->end   = end;
             kv_push(interval_t*,interval_array,interval);
             //interval = NULL;
@@ -196,9 +231,10 @@ int main(int argc, char *argv[]) {
   //ks_mergesort(interval, kv_size(interval_array), *interval_array.a, 0);
 
   /* CREATE THE MUTATED K-MER HASH */
+  fprintf(stderr, "Create mutated k-mer hash...\n");
   int ret, is_missing;
 
-  int ref_kmer_pos, mut_pos;
+  int ref_kmer_pos, mut_pos, pos;
   char ref_nuc;
   uint64_t ref_kmer, mut_kmer;
   char kmer[k_length], kmer2[k_length];;
@@ -229,26 +265,37 @@ int main(int argc, char *argv[]) {
       }
 
       //fprintf(stderr, "seq_length: %d, ref_kmer_pos: %d, mut_pos: %d\n", seq_length, ref_kmer_pos, mut_pos);
-
+      pos = interval->start + ref_kmer_pos + mut_pos;
       ref_nuc = seq[mut_pos + ref_kmer_pos];
       ref_kmer = dna_to_int(&seq[ref_kmer_pos],k_length,1);
       memmove(kmer, &seq[ref_kmer_pos], sizeof kmer);
 
-      //fprintf(stderr, "ref_seq : %s\n", seq);
-      //fprintf(stderr, "ref_kmer : %s\n", kmer);
-      //fprintf(stderr, "ref_nucl : %c\n", ref_nuc);
+      if(pos == 27581443) {
+        fprintf(stderr, "ref_seq  : %s\n", seq);
+        fprintf(stderr, "ref_kmer : %s\n", kmer);
+        fprintf(stderr, "ref_nucl : %c\n", ref_nuc);
+      }
+
 
       for(int p = 0; p < NB_NUCLEOTIDES; p++) {
         if(NUCLEOTIDES[p] != ref_nuc) {
           kmer[mut_pos] = NUCLEOTIDES[p];
+          if(pos == 27581443) {
+            fprintf(stderr, "mut_kmer %c => %c (%d): %s\n", ref_nuc, NUCLEOTIDES[p], mut_pos, kmer);
+          }
           //fprintf(stderr, "mut_kmer :       %s\n", kmer);
           mut_kmer = dna_to_int(kmer,k_length,1);
-          //int_to_dna(mut_kmer,k_length,kmer);
-          //fprintf(stderr, "canonical_kmer : %s\n", kmer);
+
+          if(pos == 27581443) {
+            int_to_dna(mut_kmer,k_length,kmer2);
+            fprintf(stderr, "canonical_kmer : %s\n", kmer2);
+          }
+
           if(kh_get(kmers, h, mut_kmer) == kh_end(h)) {
             k = kh_put(kmers, h, mut_kmer, &ret);
           	kh_value(h, k) = 0;
-            int pos            = interval->start + ref_kmer_pos + mut_pos;
+
+
             kmer_mut_t kmer_mut_struct = { mut_kmer, ref_kmer, interval->chr, pos, NUCLEOTIDES[p], ref_nuc };
             write_kmer_mut(&kmer_mut_struct, kmer_file);
             //fprintf(kmer_file, "%" PRIu64 "\t%" PRIu64 "\t%s\t%d\t%c\t%c\n",mut_kmer,ref_kmer,interval->chr,(interval->start+ref_kmer_pos+mut_pos),ref_nuc,NUCLEOTIDES[p]);
@@ -263,6 +310,7 @@ int main(int argc, char *argv[]) {
     }
 
     free(seq);
+    free(interval->chr);
     free(interval);
   }
   fclose(kmer_file);
@@ -310,39 +358,45 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  /* READ THE FASTQ FILE */
-  kseq_t *seq;
-  int l;
-  uint64_t kmer_int;
-  int nb_reads = 0;
-  fp = gzopen(fastq_file, "r");
-  seq = kseq_init(fp);
-  fprintf(stderr, "\n\nReading FASTQ file...\n");
-  while ((l = kseq_read(seq)) >= 0) {
-    nb_reads++;
-    if(strlen(seq->seq.s) >= k_length) {
-      for(int i = 0; i < strlen(seq->seq.s) - k_length + 1; i++) {
-        kmer_int = dna_to_int(&seq->seq.s[i], k_length, 1);
-        k = kh_get(kmers, h, kmer_int);
-        if(k != kh_end(h)) {
-          kh_value(h, k) = kh_value(h, k) + 1;
+  /* READ THE FASTQ FILES */
+  char *fastq_file;
+  while(optind < argc) {
+    fastq_file = argv[optind++];
+    fprintf(stderr, "Reading %s FASTQ file...\n", fastq_file);
+
+    kseq_t *seq;
+    int l;
+    uint64_t kmer_int;
+    int nb_reads = 0;
+    fp = gzopen(fastq_file, "r");
+    seq = kseq_init(fp);
+    while ((l = kseq_read(seq)) >= 0) {
+      nb_reads++;
+      if(strlen(seq->seq.s) >= k_length) {
+        for(int i = 0; i < strlen(seq->seq.s) - k_length + 1; i++) {
+          kmer_int = dna_to_int(&seq->seq.s[i], k_length, 1);
+          k = kh_get(kmers, h, kmer_int);
+          if(k != kh_end(h)) {
+            kh_value(h, k) = kh_value(h, k) + 1;
+          }
         }
       }
+      if (nb_reads % 50000 == 0){
+        fprintf(stderr, "*");
+      }
     }
-    if (nb_reads % 50000 == 0){
-      fprintf(stderr, "*");
-    }
+    fprintf(stderr, "\n%d reads parsed.\n",nb_reads);
+    kseq_destroy(seq);
+    gzclose(fp);
   }
-  //printf("return value: %d\n", l);
-  kseq_destroy(seq);
-  gzclose(fp);
 
   if(use_derived_kmers) {
+    fprintf(stderr, "Update counts with alternate kmers...\n");
     // Update the mutated k-mer count with derived k-mer counts
     FILE *kmer_alt_file= fopen("kmers_alt.txt", "r");
     kmer_alt_t kmer_alt_struct;
-    while(!feof(kmer_file)) {
-      if(read_kmer_alt(&kmer_alt_struct, kmer_file)) {
+    while(!feof(kmer_alt_file)) {
+      if(read_kmer_alt(&kmer_alt_struct, kmer_alt_file)) {
         k   = kh_get(kmers, h, kmer_alt_struct.refk);
         k2  = kh_get(kmers, h, kmer_alt_struct.altk);
         if(k != kh_end(h) && k2 != kh_end(h)) {
@@ -355,7 +409,8 @@ int main(int argc, char *argv[]) {
 
   // Update reference k-mer count with mutated k-mer counts
   kmer_file = fopen("kmers.txt", "r");
-  kmer_mut_t kmer_mut_struct;
+  kmer_mut_t kmer_mut_struct = { 0, 0, NULL, 0, '\0', '\0' };
+  fprintf(stderr, "Update counts for reference kmers...\n");
   while(!feof(kmer_file)) {
     if(read_kmer_mut(&kmer_mut_struct, kmer_file)) {
       k   = kh_get(kmers, h, kmer_mut_struct.refk);
@@ -368,16 +423,14 @@ int main(int argc, char *argv[]) {
   }
   fclose(kmer_file);
 
-
-
   /* FILTER AND PRINT OUTPUT VCF */
   fprintf(stdout, "##fileformat=VCFv4.\n");
   fprintf(stdout, "##fileformat=VCFv4.1\n");
-  fprintf(stdout, "##source=TaMI v$VERSION\n");
+  fprintf(stdout, "##source=TaMI v%s\n", TAMI_VERSION);
   fprintf(stdout, "##commandline=");
   for (int i = 0; i < argc; i++)
 		fprintf(stdout, " %s", argv[i]);
-  fprintf(stdout, "##INFO=<ID=DP,Number=1,Type=Integer,");
+  fprintf(stdout, "\n##INFO=<ID=DP,Number=1,Type=Integer,");
   fprintf(stdout, "Description=\"Total read depth at the locus\">\n");
   fprintf(stdout, "##INFO=<ID=AC,Number=A,Type=Integer,");
   fprintf(stdout, "Description=\"Total number of alternate alleles in called genotypes\">\n");
@@ -393,11 +446,14 @@ int main(int argc, char *argv[]) {
       if(k != kh_end(h) && k2 != kh_end(h)) {
         int AC = kh_val(h,k2);
         int DP = kh_val(h,k);
+        float AF = (float) AC / DP;
+        if(kmer_mut_struct.pos == 27581443) {
+          fprintf(stderr, "%s\t%d\t%s\t%c\t%c\tDP=%d;AF=%.2f;AC=%d\n", kmer_mut_struct.chr, kmer_mut_struct.pos, kmer, kmer_mut_struct.refn, kmer_mut_struct.mutn,DP,AF,AC);
+        }
         if(AC < min_alternate_count)
           continue;
         if(DP < min_coverage)
           continue;
-        float AF = (float) AC / DP;
         if(AF < min_alternate_fraction)
           continue;
         if(max_coverage > 0 && DP > max_coverage)
