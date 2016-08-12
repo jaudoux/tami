@@ -4,3 +4,11 @@
 - Support multi-sample analysis
 - support multi-sample VCF
 - Connect to Ensembl REST API for annotation
+- and RNA mode to index transcript sequence and not genomic sequence
+- add an option to request larger sequence than the one specified in the bed file to avoid
+  problem with amplicon sequenceing
+- retrieve variants from ensembl to create the alternate k-mers with known variants instead
+  of all possible variants...
+- Find a way to automatically set the -F -C -m parameters from the experimental data
+  we could use the mutated k-mers histogram and find a ways to optimize these parameters given
+  the mutation rate we could expect (ie: mut_rate < 0.01% ).
