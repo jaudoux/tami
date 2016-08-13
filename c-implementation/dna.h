@@ -55,6 +55,17 @@ static const char NUCLEOTIDES[4] = { 'A', 'C', 'G', 'T' };
 
 static const int NB_NUCLEOTIDES = 4;
 
+static const uint64_t DNA_BIT_MASK[32] = {
+  3UL, 12UL, 48UL, 192UL, 768UL, 3072UL, 12288UL, 49152UL, 196608UL,
+  786432UL, 3145728UL, 12582912UL, 50331648UL, 201326592UL, 805306368UL,
+  3221225472UL, 12884901888UL, 51539607552UL, 206158430208UL, 824633720832UL,
+  3298534883328UL, 13194139533312UL, 52776558133248UL, 211106232532992UL,
+  844424930131968UL, 3377699720527872UL, 13510798882111488UL,
+  54043195528445952UL, 216172782113783808UL, 864691128455135232UL,
+  3458764513820540928UL, 13835058055282163712UL
+
+};
+
 static inline uint64_t int_revcomp(uint64_t factor, uint32_t length) {
   uint64_t mask;
   if (length == 32)
@@ -108,6 +119,30 @@ static inline void int_to_dna(uint64_t code, size_t dna_length, char *dna) {
     dna[dna_length-i-1] = NUCLEOTIDES[code & mask];
     code >>=2;
   }
+}
+
+static inline uint64_t mut_int_dna(uint64_t code, size_t dna_length, int pos, char n) {
+  uint64_t x = (dna_length - pos - 1) * 2;
+  uint64_t up = 1;
+  if(n == 'A') {
+    code &= ~(up << x);
+    code &= ~(up << (x+1));
+  } else if(n == 'C') {
+    code |= up << x;
+    code &= ~(up << (x+1));
+  } else if(n == 'G') {
+    code &= ~(up << x);
+    code |= up << (x+1);
+  } else {
+    code |= up << x;
+    code |= up << (x+1);
+  }
+  return code;
+}
+
+static inline char nuc_from_int_dna(uint64_t code, size_t dna_length, int pos) {
+  uint64_t nuc_bit_pos = dna_length - pos - 1;
+  return NUCLEOTIDES[(code & DNA_BIT_MASK[nuc_bit_pos]) >> (nuc_bit_pos*2)];
 }
 
 #endif

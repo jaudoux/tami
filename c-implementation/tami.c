@@ -7,6 +7,7 @@
 #include "ksort.h"
 #include "khash.h"
 #include "kvec.h"
+#include "kthread.h"
 
 #include "kseq.h"
 
@@ -17,10 +18,12 @@ KHASH_MAP_INIT_INT64(kmers, uint32_t)
 #include "dna.h"
 
 #define TAMI_VERSION "0.0.3"
+#define NB_THREAD_API 10
 
 typedef struct {
   char *chr;
   int start, end;
+  char *seq;
 } interval_t;
 
 int cmp_interval (const void * a, const void * b) {
@@ -97,6 +100,12 @@ int read_kmer_alt(kmer_alt_t *kalt, FILE *fp) {
   if(r == 1) return 1;
   else return 0;
   //return fread(&kalt->refk,   sizeof(kalt->refk), 1, fp);
+}
+
+static void get_sequence_iter(void *_int_a, long i, int tid) {
+  interval_t ** int_a   = (interval_t **)_int_a;
+  interval_t *interval = int_a[i];
+  interval->seq = get_sequence(interval->chr, interval->start, interval->end);
 }
 
 int main(int argc, char *argv[]) {
@@ -246,6 +255,10 @@ int main(int argc, char *argv[]) {
   interval_array.n = j + 1;
   //ks_mergesort(interval, kv_size(interval_array), *interval_array.a, 0);
 
+  /* LOAD SEQUENCES FROM ENSEMBL API */
+  fprintf(stderr, "Load sequences from Ensembl REST API...\n");
+  kt_for(NB_THREAD_API, get_sequence_iter, interval_array.a, kv_size(interval_array));
+
   /* CREATE THE MUTATED K-MER HASH */
   fprintf(stderr, "Create mutated k-mer hash...\n");
   int ret, is_missing;
@@ -260,7 +273,8 @@ int main(int argc, char *argv[]) {
   for(int i = 0; i < kv_size(interval_array); i++) {
     interval = kv_A(interval_array,i);
 
-    char *seq = get_sequence(interval->chr, interval->start, interval->end);
+    //char *seq = get_sequence(interval->chr, interval->start, interval->end);
+    char *seq = interval->seq;
     if(debug)
       fprintf(stderr, ">%s:%d..%d\n%s\n", interval->chr, interval->start, interval->end,seq);
 
@@ -326,44 +340,35 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    free(seq);
+    free(interval->seq);
     free(interval->chr);
     free(interval);
   }
   fclose(kmer_file);
 
   if(use_derived_kmers) {
+    fprintf(stderr, "Create 2-nuc mutated k-mer (-s option)...\n");
     // Add all derived k-mer with one more mutation
     FILE *kmer_alt_file = fopen("kmers_alt.txt", "wb+"); // TODO handle error of opening
     for(k = kh_begin(h); k != kh_end(h); ++k) {
       if (!kh_exist(h,k)) continue;
       if(kh_val(h,k) == 0) {
         ref_kmer = (uint64_t)kh_key(h,k);
-        int_to_dna(ref_kmer,k_length,kmer);
-        //int_to_dna(ref_kmer,k_length,kmer2);
-        //fprintf(stderr, "ref_kmer : %s\n", kmer2);
-
         for (int n = 0; n < k_length; n++) {
-          ref_nuc = kmer[n];
+          ref_nuc = nuc_from_int_dna(ref_kmer,k_length,n);
           for(int p = 0; p < NB_NUCLEOTIDES; p++) {
             if(ref_nuc != NUCLEOTIDES[p]) {
-              kmer[n] = NUCLEOTIDES[p];
-              mut_kmer = dna_to_int(kmer,k_length,1);
+              mut_kmer = mut_int_dna(ref_kmer, k_length, n,  NUCLEOTIDES[p]);
               if(kh_get(kmers, h, mut_kmer) == kh_end(h)) {
                 k2 = kh_put(kmers, h, mut_kmer, &ret);
                 kh_value(h, k2) = 1;
                 kmer_alt_t kmer_alt = { mut_kmer, ref_kmer };
                 write_kmer_alt(&kmer_alt, kmer_alt_file);
-                //int_to_dna(mut_kmer,k_length,kmer2);
-                //fprintf(stderr, "mut_kmer : %s\n", kmer2);
               }
             }
           }
-          kmer[n] = ref_nuc;
         }
-        //fprintf(stderr, "%s\n", kmer);
       }
-      //fprintf(stderr, "TOTO\n");
     }
     fclose(kmer_alt_file);
   }
@@ -441,7 +446,6 @@ int main(int argc, char *argv[]) {
   fclose(kmer_file);
 
   /* FILTER AND PRINT OUTPUT VCF */
-  fprintf(stdout, "##fileformat=VCFv4.\n");
   fprintf(stdout, "##fileformat=VCFv4.1\n");
   fprintf(stdout, "##source=TaMI v%s\n", TAMI_VERSION);
   fprintf(stdout, "##commandline=");
