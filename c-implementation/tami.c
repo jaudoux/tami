@@ -347,6 +347,9 @@ int main(int argc, char *argv[]) {
   fclose(kmer_file);
 
   if(use_derived_kmers) {
+    // We update the size of the hash to fit the derived kmers. Theoritically, it should
+    // kh_size * k * 3, but we in practice it will be closer to a factor 2.
+    kh_resize(kmers, h, kh_size(h)*k_length*2);
     fprintf(stderr, "Create 2-nuc mutated k-mer (-s option)...\n");
     // Add all derived k-mer with one more mutation
     FILE *kmer_alt_file = fopen("kmers_alt.txt", "wb+"); // TODO handle error of opening
