@@ -26,6 +26,22 @@ typedef struct {
   char *seq;
 } interval_t;
 
+interval_t *interval_init(char *_chr, int _start, int _end) {
+  interval_t *interval = (interval_t*)malloc(sizeof(interval_t));
+  interval->chr   = _chr;
+  interval->start = _start;
+  interval->end   = _end;
+  interval->seq   = NULL;
+  return interval;
+}
+
+void interval_destroy(interval_t *interval) {
+  if(interval->seq)
+    free(interval->seq);
+  free(interval->chr);
+  free(interval);
+}
+
 int cmp_interval (const void * a, const void * b) {
   const interval_t *int_a = *(const interval_t **)a;
   const interval_t *int_b = *(const interval_t **)b;
@@ -212,12 +228,8 @@ int main(int argc, char *argv[]) {
           if(ks_getuntil(ks, 0, str, &dret) > 0 && isdigit(str->s[0])) {
             end = atoi(str->s);
             // create a new interval
-            interval = (interval_t*)malloc(sizeof(interval_t));
-            interval->chr   = ks_release(chr);
-            interval->start = start + 1; // bed files have 0-based semi-opend [) intervals
-            interval->end   = end;
+            interval = interval_init(ks_release(chr),start + 1, end);
             kv_push(interval_t*,interval_array,interval);
-            //interval = NULL;
             if(debug)
               fprintf(stderr, "Read interval : %s:%d..%d\n", interval->chr,interval->start,interval->end);
           }
@@ -339,10 +351,7 @@ int main(int argc, char *argv[]) {
         }
       }
     }
-
-    free(interval->seq);
-    free(interval->chr);
-    free(interval);
+    interval_destroy(interval);
   }
   fclose(kmer_file);
 
