@@ -483,7 +483,7 @@ int main(int argc, char *argv[]) {
         if(max_coverage > 0 && DP > max_coverage)
           continue;
         int_to_dna(kmer_mut_struct.mutk,k_length,kmer);
-        fprintf(stdout, "%s\t%d\t%s\t%c\t%c\tDP=%d;AF=%.2f;AC=%d\n", kmer_mut_struct.chr, kmer_mut_struct.pos, kmer, kmer_mut_struct.refn, kmer_mut_struct.mutn,DP,AF,AC);
+        fprintf(stdout, "%s\t%d\t%s\t%c\t%c\t.\t.\tDP=%d;AF=%.2f;AC=%d\n", kmer_mut_struct.chr, kmer_mut_struct.pos, kmer, kmer_mut_struct.refn, kmer_mut_struct.mutn,DP,AF,AC);
       }
       //fprintf(stderr, "%s:%d\t%c => %c\n", kmer_mut_struct.chr,kmer_mut_struct.pos,kmer_mut_struct.refn,kmer_mut_struct.mutn);
     }
