@@ -8,7 +8,6 @@
 #include "khash.h"
 #include "kvec.h"
 #include "kthread.h"
-
 #include "kseq.h"
 
 KSEQ_INIT(gzFile, gzread)
@@ -385,7 +384,7 @@ int main(int argc, char *argv[]) {
         } else {
           if(kh_get(kmers, h, ref_kmer) == kh_end(h)) {
             k = kh_put(kmers, h, ref_kmer, &ret);
-          	kh_value(h, k) = 1;
+          	kh_value(h, k) = 2;
           }
         }
       }
@@ -424,11 +423,35 @@ int main(int argc, char *argv[]) {
     fclose(kmer_alt_file);
   }
 
+  if(reference_fasta) {
+    fprintf(stderr, "Remove mutated k-mers that are also located on the reference %s...\n", reference_fasta);
+    int l, nb_removed_kmers = 0;
+    uint64_t kmer_int;
+    fp = gzopen(reference_fasta, "r");
+    kseq_t *seq = kseq_init(fp);
+    while ((l = kseq_read(seq)) >= 0) {
+      if(debug)
+        fprintf(stderr, "Checking chr %s\n", seq->name.s);
+      if(seq->seq.l >= k_length) {
+        for(int i = 0; i < seq->seq.l - k_length + 1; i++) {
+          // We could do something faster here by upding the previous kmer_int without
+          // One new nucleotides. This should be k-time faster (in theory)
+          kmer_int = dna_to_int(&seq->seq.s[i], k_length, 1);
+          k = kh_get(kmers, h, kmer_int);
+          if(k != kh_end(h) && kh_value(h, k) != 2) {
+            kh_del(kmers, h, k);
+            nb_removed_kmers++;
+          }
+        }
+      }
+    }
+    fprintf(stderr, "%d mutated kmers have been removed\n", nb_removed_kmers);
+  }
+
+  // Set all counters to 0
   for(k = kh_begin(h); k != kh_end(h); ++k) {
     if (!kh_exist(h,k)) continue;
-    if(kh_val(h,k) == 1) {
-      kh_value(h, k) = 0;
-    }
+    kh_value(h, k) = 0;
   }
 
   /* READ THE FASTQ FILES */
@@ -444,8 +467,8 @@ int main(int argc, char *argv[]) {
     seq = kseq_init(fp);
     while ((l = kseq_read(seq)) >= 0) {
       nb_reads++;
-      if(strlen(seq->seq.s) >= k_length) {
-        for(int i = 0; i < strlen(seq->seq.s) - k_length + 1; i++) {
+      if(seq->seq.l >= k_length) {
+        for(int i = 0; i < seq->seq.l - k_length + 1; i++) {
           kmer_int = dna_to_int(&seq->seq.s[i], k_length, 1);
           k = kh_get(kmers, h, kmer_int);
           if(k != kh_end(h)) {
