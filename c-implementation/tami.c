@@ -227,7 +227,13 @@ int main(int argc, char *argv[]) {
   ks = ks_init(fp);
 
   while (ks_getuntil(ks, 0, str, &dret) >= 0) {
-    kputs(str->s,chr);
+    // remove chr prefix if any
+    if(str->l > 3 && strncmp("chr", str->s, 3) == 0) {
+      kputs(&str->s[3],chr);
+    } else {
+      kputs(str->s,chr);
+    }
+
     if(dret != '\n') {
       if(ks_getuntil(ks, 0, str, &dret) > 0 && isdigit(str->s[0])) {
         start = atoi(str->s);
