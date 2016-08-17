@@ -42,7 +42,7 @@ void interval_destroy(interval_t *interval) {
   free(interval);
 }
 
-int cmp_interval (const void * a, const void * b) {
+int cmp_interval(const void * a, const void * b) {
   const interval_t *int_a = *(const interval_t **)a;
   const interval_t *int_b = *(const interval_t **)b;
   int chr_cmp = strcmp(int_a->chr,int_b->chr);
@@ -51,6 +51,10 @@ int cmp_interval (const void * a, const void * b) {
   } else {
     return chr_cmp;
   }
+}
+
+int interval_length(interval_t *interval) {
+  return interval->end - interval->start + 1;
 }
 
 typedef struct {
@@ -135,6 +139,7 @@ int main(int argc, char *argv[]) {
   khash_t(kmers) *h = kh_init(kmers);
 
 
+  char *bed_file = NULL, *reference_fasta = NULL, *fastq_file;
   int use_derived_kmers = 0;
   float min_alternate_fraction = 0.2;
   int min_alternate_count = 3;
@@ -147,7 +152,7 @@ int main(int argc, char *argv[]) {
 
 
   int c;
-  while ((c = getopt(argc, argv, "dsvF:C:m:M:d:k:")) >= 0) {
+  while ((c = getopt(argc, argv, "dsvF:C:m:M:d:k:r:")) >= 0) {
 		switch (c) {
 			case 'F': min_alternate_fraction = atof(optarg); break;
       case 'C': min_alternate_count = atoi(optarg); break;
@@ -155,6 +160,7 @@ int main(int argc, char *argv[]) {
       case 'M': max_coverage = atoi(optarg); break;
       case 'k': k_length = atoi(optarg); break;
       case 's': use_derived_kmers = 1; break;
+      case 'r': reference_fasta = optarg; break;
       case 'v': version = 1; break;
       case 'd': debug = 1; break;
 		}
@@ -171,6 +177,7 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "         -m INT    min coverage [%d]\n", min_coverage);
     fprintf(stderr, "         -M INT    max coverage (min_value: 1)[%d]\n", max_coverage);
     fprintf(stderr, "         -k INT    length of k-mers (max_value: 32) [%d]\n", k_length);
+    fprintf(stderr, "         -r STR    reference FASTA (otherwise sequences are retrieved from rest.ensembl.org)\n");
     fprintf(stderr, "         -s        sensitive mode (able 2 mutation per-kmer)\n");
     fprintf(stderr, "                   Warning : important memory overload and possible loss of accuracy,\n");
     fprintf(stderr, "                             this option is only adviced for amplicon sequencing.\n");
@@ -180,7 +187,7 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
-  char *bed_file    = argv[optind++];
+  bed_file = argv[optind++];
 
   // verify Options
   if(min_coverage < 1) {
@@ -267,9 +274,30 @@ int main(int argc, char *argv[]) {
   interval_array.n = j + 1;
   //ks_mergesort(interval, kv_size(interval_array), *interval_array.a, 0);
 
-  /* LOAD SEQUENCES FROM ENSEMBL API */
-  fprintf(stderr, "Load sequences from Ensembl REST API...\n");
-  kt_for(NB_THREAD_API, get_sequence_iter, interval_array.a, kv_size(interval_array));
+  /* LOAD SEQUENCES FROM FASTA OR ENSEMBL API (if not FASTA provided) */
+  if(reference_fasta) {
+    fprintf(stderr, "Load sequences from %s...\n", reference_fasta);
+    int l;
+    fp = gzopen(reference_fasta, "r");
+    kseq_t *seq = kseq_init(fp);
+    while ((l = kseq_read(seq)) >= 0) {
+      //k = kh_get(chr_intervals, h, seq->name.s);
+      for(int i = 0; i < kv_size(interval_array); i++) {
+        interval = kv_A(interval_array,i);
+        if(!interval->seq && strcmp(interval->chr, seq->name.s) == 0) {
+          int int_length = interval_length(interval);
+          char *interval_seq  = (char *)malloc(int_length * sizeof(char) + 1);
+          memcpy(interval_seq, &seq->seq.s[interval->start - 1], int_length);
+          interval_seq[int_length] = '\0';
+          interval->seq = interval_seq;
+        }
+      }
+    }
+    //kt_for(NB_THREAD_API, get_sequence_iter, interval_array.a, kv_size(interval_array));
+  } else {
+    fprintf(stderr, "Load sequences from Ensembl REST API...\n");
+    kt_for(NB_THREAD_API, get_sequence_iter, interval_array.a, kv_size(interval_array));
+  }
 
   /* CREATE THE MUTATED K-MER HASH */
   fprintf(stderr, "Create mutated k-mer hash...\n");
@@ -284,6 +312,11 @@ int main(int argc, char *argv[]) {
   // Loop over the interval array and print sequences
   for(int i = 0; i < kv_size(interval_array); i++) {
     interval = kv_A(interval_array,i);
+
+    if(!interval->seq) {
+      fprintf(stderr, "No sequence found for interval %s:%d-%d\n", interval->chr, interval->start, interval->end);
+      continue;
+    }
 
     //char *seq = get_sequence(interval->chr, interval->start, interval->end);
     char *seq = interval->seq;
@@ -393,7 +426,6 @@ int main(int argc, char *argv[]) {
   }
 
   /* READ THE FASTQ FILES */
-  char *fastq_file;
   while(optind < argc) {
     fastq_file = argv[optind++];
     fprintf(stderr, "Reading %s FASTQ file...\n", fastq_file);
