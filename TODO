@@ -1,14 +1,39 @@
-- Reduce memory footprint
-- support gene list as input
-- add an option to only index exonic sequences (and splice sites) instead of the whole genomic sequence
-- Support multi-sample analysis
-- support multi-sample VCF
-- Connect to Ensembl REST API for annotation
-- and RNA mode to index transcript sequence and not genomic sequence
-- add an option to request larger sequence than the one specified in the bed file to avoid
-  problem with amplicon sequenceing
-- retrieve variants from ensembl to create the alternate k-mers with known variants instead
+- [ ] Reduce memory footprint
+- [ ] support gene list as input
+- [ ] add an option to only index exonic sequences (and splice sites) instead of the whole genomic sequence
+- [ ] Support multi-sample analysis (check multiple fasta at the same time)
+- [ ] support multi-sample VCF (VCF version 4.0)
+- [ ] Connect to Ensembl REST API (or variant.info) to annote the variants. (this could be another command...)
+- [ ] and RNA mode to index transcript sequence and not genomic sequence
+- [ ] add an option to request larger sequence than the one specified in the bed file to avoid
+  problem with amplicon sequencing
+- [ ] retrieve variants from ensembl to create the alternate k-mers with known variants instead
   of all possible variants...
-- Find a way to automatically set the -F -C -m parameters from the experimental data
+- [ ] Find a way to automatically set the -F -C -m parameters from the experimental data
   we could use the mutated k-mers histogram and find a ways to optimize these parameters given
   the mutation rate we could expect (ie: mut_rate < 0.01% ).
+- [ ] Create a programm (or some kind of sub-command) to help the user to create his bed file
+  by connecting to Ensembl API using a gene name
+- [ ] Reference k-mers should also have alternate k-mers? or not?
+- [ ] Create a sub-command to create a mutated k-mer dictionnary (tami build) and an other to use the dictionnary
+  on experimental data (tami scan). (some kind of "index" strategy)
+- [ ] Create a standard gzipped binary file format to store the kmer dictionnary, this will include
+  - a magic number (char[4]) : 54 61 4d 46 (TaMF: Targeted Mutation Format)
+  - a header with
+    - format version number, uint32_t
+    - k-mer length, uint32_t
+    - number of disctinct k-mers : uint64_t
+      (including mutated k-mers, the reference k-mers and alternate k-mers (to allocate the hash))
+    - reference chromosomes : nb_references (uint32) + [uint32_t + [char]]
+  - mutated k-mer records with  :
+    - the chr (uint32_t)
+    - the pos (uint32_t)
+    - the ref (uint32_t + [char])
+    - the alt (uint32_t + [char])
+    - nb_reference_kmers (uint32_t)
+    - nb_mutated_kmers (uint32_t)
+    - reference k-mers : [uint64_t]
+    - mutated k-mers   : [uint64_t]
+- [ ] Multi-thread "tami scan" command.
+- [x] Optimize the k-mer int encoding by only shift the new necleotide instead of computing each time
+  the next k-mer from scratch
