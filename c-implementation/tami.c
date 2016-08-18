@@ -290,6 +290,8 @@ int main(int argc, char *argv[]) {
       for(int i = 0; i < kv_size(interval_array); i++) {
         interval = kv_A(interval_array,i);
         if(!interval->seq && strcmp(interval->chr, seq->name.s) == 0) {
+          // FIXME add a condition + warning if the ref sequence is smaller than the
+          // requested sequence
           int int_length = interval_length(interval);
           char *interval_seq  = (char *)malloc(int_length * sizeof(char) + 1);
           memcpy(interval_seq, &seq->seq.s[interval->start - 1], int_length);
@@ -306,12 +308,12 @@ int main(int argc, char *argv[]) {
 
   /* CREATE THE MUTATED K-MER HASH */
   fprintf(stderr, "Create mutated k-mer hash...\n");
-  int ret, is_missing;
+  int ret;//, is_missing;
 
-  int ref_kmer_pos, mut_pos, pos;
+  int ref_kmer_pos, prev_ref_kmer_pos, mut_pos, pos;
   char ref_nuc;
-  uint64_t ref_kmer, mut_kmer;
-  char kmer[k_length], kmer2[k_length];;
+  uint64_t ref_kmer, mut_kmer, reverse_mut_kmer, forward_ref_kmer = 0, reverse_ref_kmer = 0;
+  char kmer[k_length];
   FILE *kmer_file = fopen("kmers.txt", "wb+"); // TODO handle error of opening
 
   // Loop over the interval array and print sequences
@@ -330,6 +332,13 @@ int main(int argc, char *argv[]) {
 
     size_t seq_length = strlen(seq);
 
+    if(seq_length < k_length) {
+      fprintf(stderr, "Sequence length is smaller than k-mer length, skipping.\n");
+    }
+
+    ref_kmer = canonical_kmer(seq, k_length, &forward_ref_kmer, &reverse_ref_kmer);
+    prev_ref_kmer_pos = 0;
+
     for (int n = 0; n < seq_length; n++) {
       // Case of the left extremity where the mutated position is not the center of the k-mer
       if(n < k_middle) {
@@ -345,11 +354,17 @@ int main(int argc, char *argv[]) {
         mut_pos       = k_middle;
       }
 
+
       //fprintf(stderr, "seq_length: %d, ref_kmer_pos: %d, mut_pos: %d\n", seq_length, ref_kmer_pos, mut_pos);
       pos = interval->start + ref_kmer_pos + mut_pos;
       ref_nuc = seq[mut_pos + ref_kmer_pos];
-      ref_kmer = dna_to_int(&seq[ref_kmer_pos],k_length,1);
-      memmove(kmer, &seq[ref_kmer_pos], sizeof kmer);
+
+      if(ref_kmer_pos > prev_ref_kmer_pos) {
+        ref_kmer = next_canonical_kmer(k_length, seq[ref_kmer_pos + k_length - 1], &forward_ref_kmer, &reverse_ref_kmer);
+        prev_ref_kmer_pos = ref_kmer_pos;
+        //dna_to_int(&seq[ref_kmer_pos],k_length,1);
+        //memmove(kmer, &seq[ref_kmer_pos], sizeof kmer);
+      }
 
       // if(pos == 27581443) {
       //   fprintf(stderr, "ref_seq  : %s\n", seq);
@@ -360,22 +375,20 @@ int main(int argc, char *argv[]) {
 
       for(int p = 0; p < NB_NUCLEOTIDES; p++) {
         if(NUCLEOTIDES[p] != ref_nuc) {
-          kmer[mut_pos] = NUCLEOTIDES[p];
+          //kmer[mut_pos] = NUCLEOTIDES[p];
           // if(pos == 27581443) {
           //   fprintf(stderr, "mut_kmer %c => %c (%d): %s\n", ref_nuc, NUCLEOTIDES[p], mut_pos, kmer);
           // }
           //fprintf(stderr, "mut_kmer :       %s\n", kmer);
-          mut_kmer = dna_to_int(kmer,k_length,1);
-
-          // if(pos == 27581443) {
-          //   int_to_dna(mut_kmer,k_length,kmer2);
-          //   fprintf(stderr, "canonical_kmer : %s\n", kmer2);
-          // }
+          //mut_kmer = dna_to_int(kmer,k_length,1);
+          mut_kmer = mut_int_dna(forward_ref_kmer, k_length, mut_pos, NUCLEOTIDES[p]);
+          reverse_mut_kmer = int_revcomp(mut_kmer, k_length);
+          if(reverse_mut_kmer < mut_kmer)
+            mut_kmer = reverse_mut_kmer;
 
           if(kh_get(kmers, h, mut_kmer) == kh_end(h)) {
             k = kh_put(kmers, h, mut_kmer, &ret);
           	kh_value(h, k) = 0;
-
 
             kmer_mut_t kmer_mut_struct = { mut_kmer, ref_kmer, interval->chr, pos, NUCLEOTIDES[p], ref_nuc };
             write_kmer_mut(&kmer_mut_struct, kmer_file);
@@ -426,17 +439,23 @@ int main(int argc, char *argv[]) {
   if(reference_fasta) {
     fprintf(stderr, "Remove mutated k-mers that are also located on the reference %s...\n", reference_fasta);
     int l, nb_removed_kmers = 0;
-    uint64_t kmer_int;
+    uint64_t kmer_int, forward_kmer_int = 0, reverse_kmer_int = 0;
     fp = gzopen(reference_fasta, "r");
     kseq_t *seq = kseq_init(fp);
     while ((l = kseq_read(seq)) >= 0) {
       if(debug)
         fprintf(stderr, "Checking chr %s\n", seq->name.s);
       if(seq->seq.l >= k_length) {
+        //canonical_kmer(const char *dna, size_t dna_length, uint64_t &forward_kmer, uint64_t &reverse_kmer)
         for(int i = 0; i < seq->seq.l - k_length + 1; i++) {
           // We could do something faster here by upding the previous kmer_int without
           // One new nucleotides. This should be k-time faster (in theory)
-          kmer_int = dna_to_int(&seq->seq.s[i], k_length, 1);
+          if(i > 0) {
+            kmer_int = next_canonical_kmer(k_length, seq->seq.s[i + k_length - 1], &forward_kmer_int, &reverse_kmer_int);
+          } else {
+            kmer_int = canonical_kmer(seq->seq.s, k_length, &forward_kmer_int, &reverse_kmer_int);
+          }
+          //kmer_int = dna_to_int(&seq->seq.s[i], k_length, 1);
           k = kh_get(kmers, h, kmer_int);
           if(k != kh_end(h) && kh_value(h, k) != 2) {
             kh_del(kmers, h, k);
@@ -461,7 +480,7 @@ int main(int argc, char *argv[]) {
 
     kseq_t *seq;
     int l;
-    uint64_t kmer_int;
+    uint64_t kmer_int, forward_kmer_int = 0, reverse_kmer_int = 0;
     int nb_reads = 0;
     fp = gzopen(fastq_file, "r");
     seq = kseq_init(fp);
@@ -469,14 +488,19 @@ int main(int argc, char *argv[]) {
       nb_reads++;
       if(seq->seq.l >= k_length) {
         for(int i = 0; i < seq->seq.l - k_length + 1; i++) {
-          kmer_int = dna_to_int(&seq->seq.s[i], k_length, 1);
+          if(i > 0) {
+            kmer_int = next_canonical_kmer(k_length, seq->seq.s[i + k_length - 1], &forward_kmer_int, &reverse_kmer_int);
+          } else {
+            kmer_int = canonical_kmer(seq->seq.s, k_length, &forward_kmer_int, &reverse_kmer_int);
+          }
+          //kmer_int = dna_to_int(&seq->seq.s[i], k_length, 1);
           k = kh_get(kmers, h, kmer_int);
           if(k != kh_end(h)) {
             kh_value(h, k) = kh_value(h, k) + 1;
           }
         }
       }
-      if (nb_reads % 50000 == 0){
+      if (nb_reads % 50000 == 0) {
         fprintf(stderr, "*");
       }
     }

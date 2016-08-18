@@ -51,6 +51,36 @@ static const int base_to_int[255] =
   -1, -1, -1, -1, -1                                /* 250 - 254 */
 };
 
+static const char basecomp[255] =
+    {
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /*   0 -   9 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /*  10 -  19 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /*  20 -  29 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /*  30 -  39 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /*  40 -  49 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /*  50 -  59 */
+        '\0', '\0', '\0', '\0', '\0',  'T', '\0',  'G', '\0', '\0', /*  60 -  69 */
+        '\0',  'C', '\0', '\0', '\0', '\0', '\0', '\0',  'N', '\0', /*  70 -  79 */
+        '\0', '\0', '\0', '\0',  'A',  'A', '\0', '\0', '\0', '\0', /*  80 -  89 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0',  'T', '\0',  'G', /*  90 -  99 */
+        '\0', '\0', '\0',  'C', '\0', '\0', '\0', '\0', '\0', '\0', /* 100 - 109 */
+        '\0', '\0', '\0', '\0', '\0', '\0',  'A',  'A', '\0', '\0', /* 110 - 119 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /* 120 - 129 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /* 130 - 139 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /* 140 - 149 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /* 150 - 159 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /* 160 - 169 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /* 170 - 179 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /* 180 - 189 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /* 190 - 199 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /* 200 - 209 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /* 210 - 219 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /* 220 - 229 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /* 230 - 239 */
+        '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', /* 240 - 249 */
+        '\0', '\0', '\0', '\0', '\0'                                /* 250 - 254 */
+    };
+
 static const char NUCLEOTIDES[4] = { 'A', 'C', 'G', 'T' };
 
 static const int NB_NUCLEOTIDES = 4;
@@ -91,27 +121,23 @@ static inline uint64_t int_revcomp(uint64_t factor, uint32_t length) {
   return result;
 }
 
-static inline uint64_t dna_to_int(const char *dna, size_t dna_length, int canonical) {
-  uint64_t dna_int = 0;
-  // TODO we should check that dna_length is smaller that 32.
-  for (size_t i = 0; i< dna_length ; i++) {
-    dna_int <<= 2;
-    dna_int |= base_to_int[dna[i]];
-  }
-  // If the conversion is not "strand-specific" we calculate the reverse DNA it
-  // and return the one that has the smallest value
-  if(canonical) {
-    uint64_t rev_comp = int_revcomp(dna_int,dna_length);
-    if(rev_comp < dna_int) {
-      return rev_comp;
-    }
-  }
-  return dna_int;
-}
-
-static inline uint64_t canonical_kmer(const char *dna, size_t dna_length) {
-  return dna_to_int(dna,dna_length,1);
-}
+// static inline uint64_t dna_to_int(const char *dna, size_t dna_length, int canonical) {
+//   uint64_t dna_int = 0;
+//   // TODO we should check that dna_length is smaller that 32.
+//   for (size_t i = 0; i< dna_length ; i++) {
+//     dna_int <<= 2;
+//     dna_int |= base_to_int[(int)dna[i]];
+//   }
+//   // If the conversion is not "strand-specific" we calculate the reverse DNA it
+//   // and return the one that has the smallest value
+//   if(canonical) {
+//     uint64_t rev_comp = int_revcomp(dna_int,dna_length);
+//     if(rev_comp < dna_int) {
+//       return rev_comp;
+//     }
+//   }
+//   return dna_int;
+// }
 
 static inline void int_to_dna(uint64_t code, size_t dna_length, char *dna) {
   uint64_t mask = 3;
@@ -143,6 +169,30 @@ static inline uint64_t mut_int_dna(uint64_t code, size_t dna_length, int pos, ch
 static inline char nuc_from_int_dna(uint64_t code, size_t dna_length, int pos) {
   uint64_t nuc_bit_pos = dna_length - pos - 1;
   return NUCLEOTIDES[(code & DNA_BIT_MASK[nuc_bit_pos]) >> (nuc_bit_pos*2)];
+}
+
+
+static inline uint64_t canonical_kmer(const char *dna, size_t dna_length, uint64_t *forward_kmer, uint64_t *reverse_kmer) {
+  // TODO we should check that dna_length is smaller that 32.
+  *forward_kmer = 0;
+  for (size_t i = 0; i< dna_length ; i++) {
+    *forward_kmer <<= 2;
+    *forward_kmer |= base_to_int[(int)dna[i]];
+  }
+  *reverse_kmer = int_revcomp(*forward_kmer, dna_length);
+  return *forward_kmer < *reverse_kmer? *forward_kmer : *reverse_kmer;
+}
+
+static inline uint64_t next_canonical_kmer(size_t dna_length, char new_nuc, uint64_t *forward_kmer, uint64_t *reverse_kmer) {
+  uint64_t x = (dna_length - 1) * 2;
+  uint64_t up = 3;
+  // Unset the first nucleotide
+  *forward_kmer &= ~(up << x);
+  *forward_kmer <<= 2;
+  *forward_kmer = mut_int_dna(*forward_kmer, dna_length, dna_length - 1, new_nuc);
+  *reverse_kmer >>= 2;
+  *reverse_kmer = mut_int_dna(*reverse_kmer, dna_length, 0, basecomp[(int)new_nuc]);
+  return *forward_kmer < *reverse_kmer? *forward_kmer : *reverse_kmer;
 }
 
 #endif
