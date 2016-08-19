@@ -15,9 +15,9 @@
 - [ ] Create a programm (or some kind of sub-command) to help the user to create his bed file
   by connecting to Ensembl API using a gene name
 - [ ] Reference k-mers should also have alternate k-mers? or not?
-- [ ] Create a sub-command to create a mutated k-mer dictionnary (tami build) and an other to use the dictionnary
+- [x] Create a sub-command to create a mutated k-mer dictionnary (tami build) and an other to use the dictionnary
   on experimental data (tami scan). (some kind of "index" strategy)
-- [ ] Create a standard gzipped binary file format to store the kmer dictionnary, this will include
+- [x] Create a standard gzipped binary file format to store the kmer dictionnary, this will include
   - a magic number (char[4]) : 54 61 4d 46 (TaMF: Targeted Mutation Format)
   - a header with
     - format version number, uint32_t

@@ -1,7 +1,7 @@
 CC=gcc
 #CFLAGS=-g -Wall -O2 -Wno-unused-function -lm
 CFLAGS=-g -Wall -O2 -Wno-unused-function -lm -lpthread
-HEADERS=kstring.h kurl.h api.h kthread.h
+HEADERS=kstring.h kurl.h api.h kthread.h tam.h
 OBJECTS=$(HEADERS:.h=.o)
 LIBS=-lz -lm -lcurl
 
