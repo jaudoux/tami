@@ -37,3 +37,5 @@
 - [ ] Multi-thread "tami scan" command.
 - [x] Optimize the k-mer int encoding by only shift the new necleotide instead of computing each time
   the next k-mer from scratch
+- [ ] Create a subcommand 'stats' that parses a TAM file and report infomation about it
+- [ ] Create a subcommand 'merge' that merge TAM files
