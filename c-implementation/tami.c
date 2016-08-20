@@ -17,48 +17,10 @@ KHASH_MAP_INIT_STR(references, int32_t)
 #include "api.h"
 #include "dna.h"
 #include "tam.h"
+#include "intervals.h"
 
 #define TAMI_VERSION "0.1.0"
 #define NB_THREAD_API 10
-
-
-typedef struct {
-  char *chr;
-  int start, end;
-  char *seq;
-} interval_t;
-
-interval_t *interval_init(char *_chr, int _start, int _end) {
-  interval_t *interval = (interval_t*)malloc(sizeof(interval_t));
-  interval->chr   = _chr;
-  interval->start = _start;
-  interval->end   = _end;
-  interval->seq   = NULL;
-  return interval;
-}
-
-void interval_destroy(interval_t *interval) {
-  if(interval->seq)
-    free(interval->seq);
-  if(interval->chr)
-    free(interval->chr);
-  free(interval);
-}
-
-int cmp_interval(const void * a, const void * b) {
-  const interval_t *int_a = *(const interval_t **)a;
-  const interval_t *int_b = *(const interval_t **)b;
-  int chr_cmp = strcmp(int_a->chr,int_b->chr);
-  if(chr_cmp == 0) {
-    return ( int_a->start - int_b->start );
-  } else {
-    return chr_cmp;
-  }
-}
-
-int interval_length(interval_t *interval) {
-  return interval->end - interval->start + 1;
-}
 
 static void get_sequence_iter(void *_int_a, long i, int tid) {
   interval_t ** int_a   = (interval_t **)_int_a;
@@ -112,21 +74,17 @@ int tami_build(int argc, char *argv[]) {
   }
 
   gzFile fp;
-	kstream_t *ks;
-	kstring_t *str;
   interval_t *interval;
   tam_header_t *tam_header = tam_header_init();
   tam_record_t *tam_record = tam_record_init();
-  kvec_t(interval_t*) interval_array;
+  interval_array_t *interval_array = interval_array_init();
   kvec_t(char*) reference_names;
   khiter_t k, k2;
   khash_t(kmers) *h_k = kh_init(kmers);
   khash_t(references) *h_r = kh_init(references);
   char *tmp_output_file;
-  kstring_t *chr;
-  int start, end, dret, ret;
+  int ret;
 
-  kv_init(interval_array);
   kv_init(reference_names);
 
   tmp_output_file= malloc(strlen(output_file) + strlen(".tmp") + 1);
@@ -138,72 +96,20 @@ int tami_build(int argc, char *argv[]) {
   *                   READ THE BED FILE AND LOAD INTERVALS
   *****************************************************************************/
   fprintf(stderr, "Reading BED file...\n");
+  load_intervals_from_bed(bed_file, interval_array);
 
-  str = calloc(1, sizeof(kstring_t));
-  chr = calloc(1, sizeof(kstring_t));
-  fp = strcmp(bed_file, "-")? gzopen(bed_file, "r") : gzdopen(fileno(stdin), "r");
-  ks = ks_init(fp);
-
-  while (ks_getuntil(ks, 0, str, &dret) >= 0) {
-    // remove chr prefix if any
-    if(str->l > 3 && strncmp("chr", str->s, 3) == 0)
-      kputs(&str->s[3],chr);
-    else
-      kputs(str->s,chr);
-
-    if(dret != '\n') {
-      if(ks_getuntil(ks, 0, str, &dret) > 0 && isdigit(str->s[0])) {
-        start = atoi(str->s);
-        if(dret != '\n') {
-          if(ks_getuntil(ks, 0, str, &dret) > 0 && isdigit(str->s[0])) {
-            end = atoi(str->s);
-            // create a new interval
-            interval = interval_init(ks_release(chr),start + 1, end);
-            kv_push(interval_t*,interval_array,interval);
-            // Add the ref seq to the hash
-            if(kh_get(references, h_r, interval->chr) == kh_end(h_r)) {
-              char *chr_cpy = malloc(sizeof(char) * (strlen(interval->chr) + 1));
-              strcpy(chr_cpy,interval->chr);
-              kv_push(char*,reference_names,chr_cpy);
-              k = kh_put(references, h_r, chr_cpy, &ret);
-              kh_value(h_r, k) = kv_size(reference_names) - 1;
-            }
-            if(debug)
-              fprintf(stderr, "Read interval : %s:%d..%d\n", interval->chr,interval->start,interval->end);
-          }
-        }
-      }
-    }
-    // skip the rest of the line
-		if (dret != '\n') while ((dret = ks_getc(ks)) > 0 && dret != '\n');
-    // release the current chr
-    if(chr->l > 0) { chr->l = 0; };
-  }
-  ks_destroy(ks);
-  gzclose(fp);
-  free(str->s); free(str);
-
-  /*****************************************************************************
-  *                   SORT AND REMOVE OVERLAPPING INTERVALS
-  *****************************************************************************/
-
-  // Sort and remove overlapping intervals
-  qsort(interval_array.a, kv_size(interval_array), sizeof(interval_array.a[0]), cmp_interval);
-  int j = 0;
-  for(int i = 1; i < kv_size(interval_array); i++) {
-    //interval_t *curr_interval = kv_A(interval_array,i);
-    if(strcmp(interval_array.a[j]->chr,interval_array.a[i]->chr) == 0 &&
-      interval_array.a[i]->start <= interval_array.a[j]->end) {
-      if(interval_array.a[i]->end > interval_array.a[j]->end) {
-        interval_array.a[j]->end = interval_array.a[i]->end;
-        interval_destroy(interval_array.a[i]);
-      }
-    } else {
-      interval_array.a[++j] = interval_array.a[i];
+  for(int i = 0; i < kv_size(*interval_array); i++) {
+    interval = kv_A(*interval_array,i);
+    if(kh_get(references, h_r, interval->chr) == kh_end(h_r)) {
+      char *chr_cpy = malloc(strlen(interval->chr) + 1);
+      strcpy(chr_cpy,interval->chr);
+      kv_push(char*,reference_names,chr_cpy);
+      k = kh_put(references, h_r, chr_cpy, &ret);
+      kh_value(h_r, k) = kv_size(reference_names) - 1;
     }
   }
-  // Set the new size of the interval array
-  interval_array.n = j + 1;
+
+  merge_overlapping_intervals(interval_array);
 
   /*****************************************************************************
   *                  LOAD SEQUENCES FROM FASTA OR ENSEMBL API
@@ -212,28 +118,11 @@ int tami_build(int argc, char *argv[]) {
 
   if(reference_fasta) {
     fprintf(stderr, "Load sequences from %s...\n", reference_fasta);
-    int l;
-    fp = gzopen(reference_fasta, "r");
-    kseq_t *seq = kseq_init(fp);
-    while ((l = kseq_read(seq)) >= 0) {
-      //k = kh_get(chr_intervals, h, seq->name.s);
-      for(int i = 0; i < kv_size(interval_array); i++) {
-        interval = kv_A(interval_array,i);
-        if(!interval->seq && strcmp(interval->chr, seq->name.s) == 0) {
-          // FIXME add a condition + warning if the ref sequence is smaller than the
-          // requested sequence
-          int int_length = interval_length(interval);
-          char *interval_seq  = (char *)malloc(int_length * sizeof(char) + 1);
-          memcpy(interval_seq, &seq->seq.s[interval->start - 1], int_length);
-          interval_seq[int_length] = '\0';
-          interval->seq = interval_seq;
-        }
-      }
-    }
+    load_intervals_seq_from_fasta(reference_fasta, interval_array);
     //kt_for(NB_THREAD_API, get_sequence_iter, interval_array.a, kv_size(interval_array));
   } else {
     fprintf(stderr, "Load sequences from Ensembl REST API...\n");
-    kt_for(NB_THREAD_API, get_sequence_iter, interval_array.a, kv_size(interval_array));
+    kt_for(NB_THREAD_API, get_sequence_iter, interval_array->a, kv_size(*interval_array));
   }
 
   /*****************************************************************************
@@ -270,8 +159,8 @@ int tami_build(int argc, char *argv[]) {
   tam_record->alt_seq_l   = 1;
 
   // Loop over the interval array and print sequences
-  for(int i = 0; i < kv_size(interval_array); i++) {
-    interval = kv_A(interval_array,i);
+  for(int i = 0; i < kv_size(*interval_array); i++) {
+    interval = kv_A(*interval_array,i);
 
     if(!interval->seq) {
       fprintf(stderr, "No sequence found for interval %s:%d-%d\n", interval->chr, interval->start, interval->end);
@@ -451,10 +340,11 @@ int tami_build(int argc, char *argv[]) {
     rename(tmp_output_file, output_file);
   }
 
-  kv_destroy(interval_array);
+  kv_destroy(*interval_array);
   kv_destroy(reference_names);
   tam_header_destroy(tam_header);
   tam_record_destroy(tam_record);
+  //interval_array_destroy(interval_array); // FIXME THERE IS A PROBLEM WITH A DOUBLE FREE
 	return 0;
 }
 
@@ -520,6 +410,7 @@ int tami_scan(int argc, char *argv[]) {
   k_length = tam_header->k;
   kh_resize(kmers, h_k, tam_header->n_kmers);
   while(tam_record_read(tam_record,tam_file)) {
+    //fprintf(stderr, "TOTO\n");
     for(int i = 0; i < tam_record->n_ref_kmers; i++) {
       k = kh_put(kmers, h_k, tam_record->ref_kmers[i], &ret);
       kh_value(h_k, k) = 0;
@@ -529,6 +420,7 @@ int tami_scan(int argc, char *argv[]) {
       kh_value(h_k, k) = 0;
     }
   }
+  fprintf(stderr, "%d k-mers loaded into memory\n", (int)kh_size(h_k));
   fclose(tam_file);
 
   /*****************************************************************************
@@ -580,7 +472,7 @@ int tami_scan(int argc, char *argv[]) {
   *****************************************************************************/
 
   fprintf(stderr, "Update counts...\n");
-  tam_file = tam_open("kmers.tam", "rb");
+  tam_file = tam_open(tam_path, "rb");
   tam_header_read(tam_header,tam_file);
   while(tam_record_read(tam_record,tam_file)) {
     for(int i = 0; i < tam_record->n_ref_kmers; i++) {
@@ -614,8 +506,7 @@ int tami_scan(int argc, char *argv[]) {
   fprintf(stdout, "Description=\"Estimated allele frequency in the range (0,1]\">\n");
   fprintf(stdout, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n");
 
-
-  tam_file = tam_open("kmers.tam", "rb");
+  tam_file = tam_open(tam_path, "rb");
   tam_header_read(tam_header,tam_file);
   while(tam_record_read(tam_record,tam_file)) {
     int AC = 0;
