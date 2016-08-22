@@ -61,7 +61,10 @@ int load_intervals_from_bed(const char * bed_file, interval_array_t *a) {
 
   str = calloc(1, sizeof(kstring_t));
   chr = calloc(1, sizeof(kstring_t));
-  fp = strcmp(bed_file, "-")? gzopen(bed_file, "r") : gzdopen(fileno(stdin), "r");
+  //fp = strcmp(bed_file, "-")? gzopen(bed_file, "r") : gzdopen(fileno(stdin), "r");
+  fp = gzopen(bed_file, "r");
+  if(!fp) { fprintf(stderr, "Failed to open %s\n", bed_file); exit(EXIT_FAILURE); }
+  
   ks = ks_init(fp);
 
   while (ks_getuntil(ks, 0, str, &dret) >= 0) {
