@@ -5,7 +5,7 @@
 
 #include "tam.h"
 
-gzFile *tam_open(const char *path, const char *mode) {
+gzFile tam_open(const char *path, const char *mode) {
   /* try gzopen */
   return gzopen(path,mode);
 }
@@ -24,7 +24,7 @@ void tam_header_destroy(tam_header_t *h) {
   free(h);
 }
 
-int tam_header_write(tam_header_t *h, gzFile *fp) {
+int tam_header_write(tam_header_t *h, gzFile fp) {
   char magic_number[4] = "TaMF";
   gzwrite(fp, &magic_number, 4);
   gzwrite(fp, &h->k,         sizeof(h->k));
@@ -38,7 +38,7 @@ int tam_header_write(tam_header_t *h, gzFile *fp) {
   return 1;
 }
 
-int tam_header_read(tam_header_t *h, gzFile *fp) {
+int tam_header_read(tam_header_t *h, gzFile fp) {
   char magic_number[4];
   size_t r;
   r = gzread(fp, &magic_number, 4);
@@ -85,7 +85,7 @@ void tam_record_destroy(tam_record_t *r) {
   free(r);
 }
 
-int tam_record_write(tam_record_t *r, gzFile *fp) {
+int tam_record_write(tam_record_t *r, gzFile fp) {
   //fwrite(&magic_number, sizeof(char), 4, fp);
   gzwrite(fp, &r->ref_id,      sizeof(r->ref_id));
   gzwrite(fp, &r->pos,         sizeof(r->pos));
@@ -100,7 +100,7 @@ int tam_record_write(tam_record_t *r, gzFile *fp) {
   return 1;
 }
 
-int tam_record_read(tam_record_t *d, gzFile *fp) {
+int tam_record_read(tam_record_t *d, gzFile fp) {
   size_t r;
   //fwrite(&magic_number, sizeof(char), 4, fp);
   r = gzread(fp, &d->ref_id,      sizeof(d->ref_id));

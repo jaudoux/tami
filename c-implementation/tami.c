@@ -136,7 +136,7 @@ int tami_build(int argc, char *argv[]) {
   uint64_t ref_kmer, mut_kmer, reverse_mut_kmer, forward_ref_kmer = 0, reverse_ref_kmer = 0;
 
   /* open file pointer */
-  gzFile *tam_file = tam_open(output_file, "wb");
+  gzFile tam_file = tam_open(output_file, "wb");
 
   // Write kmer_file header
   tam_header->k = k_length;
@@ -247,7 +247,7 @@ int tami_build(int argc, char *argv[]) {
     fprintf(stderr, "Create 2-nuc mutated k-mer (-s option)...\n");
     // Add all derived k-mer with one more mutation
     tam_file = tam_open(output_file, "rb");
-    gzFile *tam_file_alt = tam_open(tmp_output_file, "wb");
+    gzFile tam_file_alt = tam_open(tmp_output_file, "wb");
 
     if(tam_header_read(tam_header,tam_file)) {
 
@@ -318,7 +318,7 @@ int tami_build(int argc, char *argv[]) {
     fprintf(stderr, "Updating the TAM file...\n");
     // Write the final tam file
     tam_file = tam_open(output_file, "rb");
-    gzFile *tam_file_clean = tam_open(tmp_output_file, "wb");
+    gzFile tam_file_clean = tam_open(tmp_output_file, "wb");
 
     if(tam_header_read(tam_header,tam_file)) {
       tam_header->n_kmers = kh_size(h_k);
@@ -399,7 +399,7 @@ int tami_scan(int argc, char *argv[]) {
 
   tam_header_t *tam_header = tam_header_init();
   tam_record_t *tam_record = tam_record_init();
-  gzFile * tam_file = tam_open(tam_path, "rb");
+  gzFile  tam_file = tam_open(tam_path, "rb");
   khiter_t k, k2;
   khash_t(kmers) *h_k = kh_init(kmers);
   char *kmer;
