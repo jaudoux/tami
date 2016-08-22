@@ -12,7 +12,7 @@ typedef struct {
 typedef struct {
   int32_t ref_id;
   uint32_t pos, n_ref_kmers, n_alt_kmers;
-  uint8_t ref_seq_l, alt_seq_l;
+  // uint8_t ref_seq_l, alt_seq_l;
   char *ref_seq, *alt_seq;
   uint64_t *ref_kmers, *alt_kmers;
 } tam_record_t;

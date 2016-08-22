@@ -86,13 +86,14 @@ void tam_record_destroy(tam_record_t *r) {
 }
 
 int tam_record_write(tam_record_t *r, gzFile fp) {
+  uint8_t ref_seq_l = strlen(r->ref_seq), alt_seq_l = strlen(r->alt_seq);
   //fwrite(&magic_number, sizeof(char), 4, fp);
   gzwrite(fp, &r->ref_id,      sizeof(r->ref_id));
   gzwrite(fp, &r->pos,         sizeof(r->pos));
-  gzwrite(fp, &r->ref_seq_l,   sizeof(r->ref_seq_l));
-  gzwrite(fp, &r->alt_seq_l,   sizeof(r->alt_seq_l));
-  gzwrite(fp, r->ref_seq,      r->ref_seq_l);
-  gzwrite(fp, r->alt_seq,      r->alt_seq_l);
+  gzwrite(fp, &ref_seq_l,      sizeof(ref_seq_l));
+  gzwrite(fp, &alt_seq_l,      sizeof(alt_seq_l));
+  gzwrite(fp, r->ref_seq,      ref_seq_l);
+  gzwrite(fp, r->alt_seq,      alt_seq_l);
   gzwrite(fp, &r->n_ref_kmers, sizeof(r->n_ref_kmers));
   gzwrite(fp, &r->n_alt_kmers, sizeof(r->n_alt_kmers));
   gzwrite(fp, r->ref_kmers,    sizeof(uint64_t) * r->n_ref_kmers);
@@ -102,26 +103,27 @@ int tam_record_write(tam_record_t *r, gzFile fp) {
 
 int tam_record_read(tam_record_t *d, gzFile fp) {
   size_t r;
+  uint8_t ref_seq_l, alt_seq_l;
   //fwrite(&magic_number, sizeof(char), 4, fp);
   r = gzread(fp, &d->ref_id,      sizeof(d->ref_id));
   if(r == sizeof(d->ref_id))    r = gzread(fp, &d->pos,        sizeof(d->pos)); else return 0;
-  if(r == sizeof(d->pos))       r = gzread(fp, &d->ref_seq_l,  sizeof(d->ref_seq_l)); else return 0;
-  if(r == sizeof(d->ref_seq_l)) r = gzread(fp, &d->alt_seq_l,  sizeof(d->alt_seq_l)); else return 0;
-  if(r == sizeof(d->alt_seq_l)) {
+  if(r == sizeof(d->pos))       r = gzread(fp, &ref_seq_l,  sizeof(ref_seq_l)); else return 0;
+  if(r == sizeof(ref_seq_l)) r = gzread(fp, &alt_seq_l,  sizeof(alt_seq_l)); else return 0;
+  if(r == sizeof(alt_seq_l)) {
     // Alocate space for sequence
     if(d->ref_seq)
-      d->ref_seq = realloc(d->ref_seq, d->ref_seq_l + 1);
+      d->ref_seq = realloc(d->ref_seq, ref_seq_l + 1);
     else
-      d->ref_seq = malloc(d->ref_seq_l + 1);
+      d->ref_seq = malloc(ref_seq_l + 1);
     if(d->alt_seq)
-      d->alt_seq = realloc(d->alt_seq, d->alt_seq_l + 1);
+      d->alt_seq = realloc(d->alt_seq, alt_seq_l + 1);
     else
-      d->alt_seq = malloc(d->alt_seq_l + 1);
-    d->ref_seq[d->ref_seq_l] = '\0';
-    d->alt_seq[d->alt_seq_l] = '\0';
-    r = gzread(fp, d->ref_seq, d->ref_seq_l);
-    if(r == d->ref_seq_l) r = gzread(fp, d->alt_seq, d->alt_seq_l); else return 0;
-    if(r == d->alt_seq_l) r = gzread(fp, &d->n_ref_kmers, sizeof(d->n_ref_kmers)); else return 0;
+      d->alt_seq = malloc(alt_seq_l + 1);
+    d->ref_seq[ref_seq_l] = '\0';
+    d->alt_seq[alt_seq_l] = '\0';
+    r = gzread(fp, d->ref_seq, ref_seq_l);
+    if(r == ref_seq_l) r = gzread(fp, d->alt_seq, alt_seq_l); else return 0;
+    if(r == alt_seq_l) r = gzread(fp, &d->n_ref_kmers, sizeof(d->n_ref_kmers)); else return 0;
     if(r == sizeof(d->n_ref_kmers)) r = gzread(fp, &d->n_alt_kmers, sizeof(d->n_alt_kmers)); else return 0;
     if(r == sizeof(d->n_alt_kmers)) {
       // Alocate space for k-mers

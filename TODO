@@ -39,3 +39,8 @@
   the next k-mer from scratch
 - [ ] Create a subcommand 'stats' that parses a TAM file and report infomation about it
 - [ ] Create a subcommand 'merge' that merge TAM files
+- [ ] Create a subcommand 'fromvcf' to create a TAM file of known mutations from a VCF file
+- [x] Support single nucleotides indels in 'tami build'
+- [ ] Add special treatment for removing k-mers also present in the reference when sensitive
+      option is activated. We should check if there is a one-base substitution that could be better
+      than a two-base substitution.
