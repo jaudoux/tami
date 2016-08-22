@@ -136,7 +136,7 @@ int tami_build(int argc, char *argv[]) {
   uint64_t ref_kmer, mut_kmer, reverse_mut_kmer, forward_ref_kmer = 0, reverse_ref_kmer = 0;
 
   /* open file pointer */
-  FILE *tam_file = tam_open(output_file, "wb");
+  gzFile *tam_file = tam_open(output_file, "wb");
 
   // Write kmer_file header
   tam_header->k = k_length;
@@ -232,7 +232,8 @@ int tami_build(int argc, char *argv[]) {
     }
     //interval_destroy(interval);
   }
-  fclose(tam_file);
+  gzclose(tam_file);
+
 
   /*****************************************************************************
   *                          ADD 2-nt MUTATED K-MER
@@ -246,7 +247,7 @@ int tami_build(int argc, char *argv[]) {
     fprintf(stderr, "Create 2-nuc mutated k-mer (-s option)...\n");
     // Add all derived k-mer with one more mutation
     tam_file = tam_open(output_file, "rb");
-    FILE *tam_file_alt = tam_open(tmp_output_file, "wb");
+    gzFile *tam_file_alt = tam_open(tmp_output_file, "wb");
 
     if(tam_header_read(tam_header,tam_file)) {
 
@@ -275,8 +276,8 @@ int tami_build(int argc, char *argv[]) {
         }
       }
     }
-    fclose(tam_file);
-    fclose(tam_file_alt);
+    gzclose(tam_file);
+    gzclose(tam_file_alt);
     rename(tmp_output_file, output_file);
   }
 
@@ -317,7 +318,7 @@ int tami_build(int argc, char *argv[]) {
     fprintf(stderr, "Updating the TAM file...\n");
     // Write the final tam file
     tam_file = tam_open(output_file, "rb");
-    FILE *tam_file_clean = tam_open(tmp_output_file, "wb");
+    gzFile *tam_file_clean = tam_open(tmp_output_file, "wb");
 
     if(tam_header_read(tam_header,tam_file)) {
       tam_header->n_kmers = kh_size(h_k);
@@ -335,8 +336,8 @@ int tami_build(int argc, char *argv[]) {
         tam_record_write(tam_record, tam_file_clean);
       }
     }
-    fclose(tam_file);
-    fclose(tam_file_clean);
+    gzclose(tam_file);
+    gzclose(tam_file_clean);
     rename(tmp_output_file, output_file);
   }
 
@@ -398,7 +399,7 @@ int tami_scan(int argc, char *argv[]) {
 
   tam_header_t *tam_header = tam_header_init();
   tam_record_t *tam_record = tam_record_init();
-  FILE * tam_file = tam_open(tam_path, "rb");
+  gzFile * tam_file = tam_open(tam_path, "rb");
   khiter_t k, k2;
   khash_t(kmers) *h_k = kh_init(kmers);
   char *kmer;
@@ -421,7 +422,7 @@ int tami_scan(int argc, char *argv[]) {
     }
   }
   fprintf(stderr, "%d k-mers loaded into memory\n", (int)kh_size(h_k));
-  fclose(tam_file);
+  gzclose(tam_file);
 
   /*****************************************************************************
   *                             SCAN FASTQ FILES
@@ -486,7 +487,7 @@ int tami_scan(int argc, char *argv[]) {
       }
     }
   }
-  fclose(tam_file);
+  gzclose(tam_file);
 
   /*****************************************************************************
   *                             PRINT OUTPUT
@@ -511,6 +512,8 @@ int tami_scan(int argc, char *argv[]) {
   while(tam_record_read(tam_record,tam_file)) {
     int AC = 0;
     int DP = 0;
+    int max_alt_kmer_value = 0;
+    uint64_t max_alt_kmer = 0;
     for(int i = 0; i < tam_record->n_ref_kmers; i++) {
       k = kh_get(kmers, h_k, tam_record->ref_kmers[i]);
       if(k != kh_end(h_k)) {
@@ -521,6 +524,10 @@ int tami_scan(int argc, char *argv[]) {
       k   = kh_get(kmers, h_k, tam_record->alt_kmers[i]);
       if(k != kh_end(h_k)) {
         AC += kh_val(h_k, k);
+        if(kh_val(h_k, k) > max_alt_kmer_value) {
+          max_alt_kmer_value = kh_val(h_k, k);
+          max_alt_kmer = tam_record->alt_kmers[i];
+        }
       }
     }
 
@@ -533,11 +540,11 @@ int tami_scan(int argc, char *argv[]) {
       continue;
     if(max_coverage > 0 && DP > max_coverage)
       continue;
-    int_to_dna(tam_record->alt_kmers[0],k_length,kmer);
+    int_to_dna(max_alt_kmer,k_length,kmer);
     fprintf(stdout, "%s\t%d\t%s\t%s\t%s\t.\t.\tDP=%d;AF=%.2f;AC=%d\n", tam_header->ref[tam_record->ref_id], tam_record->pos, kmer, tam_record->ref_seq, tam_record->alt_seq, DP, AF, AC);
 
   }
-  fclose(tam_file);
+  gzclose(tam_file);
 
   tam_header_destroy(tam_header);
   tam_record_destroy(tam_record);
