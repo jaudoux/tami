@@ -2,6 +2,7 @@
 #include <stdlib.h> //free
 #include <zlib.h>
 #include <inttypes.h>
+#include <math.h> // pow()
 
 #include "kstring.h"
 #include "ksort.h"
@@ -29,6 +30,30 @@ typedef khash_t(kmers) kmers_hash_t;
 #define REFERENCE_KMER 1
 #define MUTATED_KMER 2
 #define DOUBLE_MUTATED_KMER 3
+
+long long combi(int n,int k) {
+  long long ans = 1;
+  k = k > n - k? n - k : k;
+  int j = 1;
+  for(; j <= k; j++, n--) {
+    if(n % j == 0) {
+      ans *= n / j;
+    } else
+    if(ans % j == 0) {
+      ans = ans / j * n;
+    } else {
+      ans = (ans * n) / j;
+    }
+  }
+  return ans;
+}
+
+unsigned long factorial(unsigned long f) {
+  if (f == 0)
+    return 1;
+  return(f * factorial(f - 1));
+}
+
 
 char *get_tmp_filename(const char * f) {
   char * tmp = malloc(strlen(f) + strlen(".tmp") + 1);
@@ -816,6 +841,50 @@ int tami_scan(int argc, char *argv[]) {
   }
   gzclose(tam_file);
 
+  // Compute mean coverage
+  // int x = 0;
+  // int y = 0;
+  // int N = 0;
+  //
+  // tam_file = tam_open(tam_path, "rb");
+  // tam_header_read(tam_header,tam_file);
+  // while(tam_record_read(tam_record,tam_file)) {
+  //   for(int i = 0; i < tam_record->n_ref_kmers; i++) {
+  //     if(tam_record->ref_kmers[i] > 0) {
+  //       N++;
+  //       break;
+  //     }
+  //   }
+  // }
+  // gzclose(tam_file);
+  //
+  // tam_file = tam_open(tam_path, "rb");
+  // tam_header_read(tam_header,tam_file);
+  // while(tam_record_read(tam_record,tam_file)) {
+  //   int DP = 0;
+  //   for(int i = 0; i < tam_record->n_ref_kmers; i++) {
+  //     k = kh_get(kmers, h_k, tam_record->ref_kmers[i]);
+  //     if(k != kh_end(h_k)) {
+  //       DP += kh_val(h_k, k);
+  //     }
+  //   }
+  //   if(DP > 0) {
+  //     x += DP / N;
+  //     int b = DP % N;
+  //     if (y >= N - b) {
+  //       x++;
+  //       y -= N - b;
+  //     } else {
+  //       y += b;
+  //     }
+  //   }
+  // }
+  // gzclose(tam_file);
+  //
+  // double mean_coverage =  x + y / N;
+  // fprintf(stderr, "Mean coverage: %.2f\n", mean_coverage);
+  // double negative_mean_coverage_exp = exp(-1 * mean_coverage);
+
   /*****************************************************************************
   *                             PRINT OUTPUT
   *****************************************************************************/
@@ -867,8 +936,39 @@ int tami_scan(int argc, char *argv[]) {
       continue;
     if(max_coverage > 0 && DP > max_coverage)
       continue;
+
+    // Compute genotypes see LAVA paper (Shajii & al 2016)
+    char GT[4] = "0|0";
+    double p_error = 0.01;
+    long long combi_a = combi(DP, DP - AC);
+    long long combi_b = combi(DP, AC);
+    double p_C_g0 = (double) combi_a * pow(1 - p_error, DP - AC) * pow(p_error, AC);
+    double p_C_g1 = (double) combi_a * 1/pow(2, DP);
+    double p_C_g2 = (double) combi_b * pow(p_error, DP - AC) * pow(1 - p_error, AC);
+    double p_C    = p_C_g0 + p_C_g1 + p_C_g2;
+    double p_g0   = pow((double) (DP - AC) / DP, 2);
+    double p_g2   = pow((double) AC / DP, 2);
+    double p_g1   = 1 - p_g0 - p_g2;
+    double p_g0_C = p_g0 * p_C_g0 / p_C;
+    double p_g1_C = p_g1 * p_C_g1 / p_C;
+    double p_g2_C = p_g2 * p_C_g2 / p_C;
+    // double scaling_term = pow(mean_coverage, DP) / factorial(DP) * negative_mean_coverage_exp;
+    // double score, p;
+
+    if(p_g1_C > p_g0_C && p_g1_C > p_g2_C) {
+      strcpy(GT,"0|1");
+      // p = p_g1_C;
+    } else if(p_g2_C > p_g0_C && p_g2_C > p_g1_C) {
+      strcpy(GT,"1|1");
+      // p = p_g2_C;
+    } else {
+      // p = p_g0_C;
+    }
+
+    // score = p * scaling_term;
+
     int_to_dna(max_alt_kmer,k_length,kmer);
-    fprintf(stdout, "%s\t%d\t%s\t%s\t%s\t.\t.\tDP=%d;AF=%.2f;AC=%d\n", tam_header->ref[tam_record->ref_id], tam_record->pos + 1, kmer, tam_record->ref_seq, tam_record->alt_seq, DP, AF, AC);
+    fprintf(stdout, "%s\t%d\t%s\t%s\t%s\t.\t.\tGT=%s;DP=%d;AF=%.2f;AC=%d\n", tam_header->ref[tam_record->ref_id], tam_record->pos + 1, kmer, tam_record->ref_seq, tam_record->alt_seq, GT, DP, AF, AC);
 
   }
   gzclose(tam_file);
