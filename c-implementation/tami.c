@@ -22,7 +22,7 @@ typedef khash_t(kmers) kmers_hash_t;
 #include "tam.h"
 #include "intervals.h"
 
-#define TAMI_VERSION "0.1.0"
+#define TAMI_VERSION "0.2.0"
 #define NB_THREAD_API 10
 #define DEFAULT_OUTPUT_NAME "kmers.tam"
 #define DEFAULT_K_LENGTH 32
