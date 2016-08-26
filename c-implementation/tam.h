@@ -28,3 +28,4 @@ tam_record_t *tam_record_init();
 void tam_record_destroy(tam_record_t *r);
 int tam_record_write(tam_record_t *r, gzFile fp);
 int tam_record_read(tam_record_t *r, gzFile fp);
+void tam_record_print(FILE *stream, const tam_header_t *h, const tam_record_t *r);

@@ -64,7 +64,7 @@ int load_intervals_from_bed(const char * bed_file, interval_array_t *a) {
   //fp = strcmp(bed_file, "-")? gzopen(bed_file, "r") : gzdopen(fileno(stdin), "r");
   fp = gzopen(bed_file, "r");
   if(!fp) { fprintf(stderr, "Failed to open %s\n", bed_file); exit(EXIT_FAILURE); }
-  
+
   ks = ks_init(fp);
 
   while (ks_getuntil(ks, 0, str, &dret) >= 0) {
@@ -79,9 +79,9 @@ int load_intervals_from_bed(const char * bed_file, interval_array_t *a) {
         start = atoi(str->s);
         if(dret != '\n') {
           if(ks_getuntil(ks, 0, str, &dret) > 0 && isdigit(str->s[0])) {
-            end = atoi(str->s);
+            end = atoi(str->s) - 1;
             // create a new interval
-            interval = interval_init(ks_release(chr),start + 1, end);
+            interval = interval_init(ks_release(chr),start, end);
             kv_push(interval_t*,*a,interval);
           }
         }
@@ -135,7 +135,7 @@ int load_intervals_seq_from_fasta(const char* fasta_file, interval_array_t *a) {
         strcmp(interval->chr, seq->name.s) == 0) {
         int_l = interval_length(interval);
         interval->seq = malloc(int_l + 1);
-        memcpy(interval->seq, &seq->seq.s[interval->start - 1], int_l);
+        memcpy(interval->seq, &seq->seq.s[interval->start], int_l);
         interval->seq[int_l] = '\0'; // FIXME is it necessary?
         nb_load++;
       }

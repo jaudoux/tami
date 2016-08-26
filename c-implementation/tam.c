@@ -3,6 +3,7 @@
 #include <string.h>
 #include <zlib.h>
 
+#include "dna.h"
 #include "tam.h"
 
 gzFile tam_open(const char *path, const char *mode) {
@@ -147,4 +148,21 @@ int tam_record_read(tam_record_t *d, gzFile fp) {
     return 0;
   }
   return r;
+}
+
+void tam_record_print(FILE *stream, const tam_header_t *h, const tam_record_t *r) {
+  char kmer[h->k + 1];
+  kmer[h->k] = '\0';
+  fprintf(stream, "%s\t%d\t%s\t%s", h->ref[r->ref_id], r->pos + 1, r->ref_seq, r->alt_seq);
+  for(int i = 0; i < r->n_ref_kmers; i++) {
+    int_to_dna(r->ref_kmers[i],h->k,kmer);
+    if(i > 0) fprintf(stream, ",%s", kmer);
+    else fprintf(stream, "\t%s", kmer);
+  }
+  for(int i = 0; i < r->n_alt_kmers; i++) {
+    int_to_dna(r->alt_kmers[i],h->k,kmer);
+    if(i > 0) fprintf(stream, ",%s", kmer);
+    else fprintf(stream, "\t%s", kmer);
+  }
+  fprintf(stream, "\n");
 }

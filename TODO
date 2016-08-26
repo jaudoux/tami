@@ -1,4 +1,4 @@
-- [ ] Reduce memory footprint
+- [x] Reduce memory footprint
 - [ ] support gene list as input
 - [ ] add an option to only index exonic sequences (and splice sites) instead of the whole genomic sequence
 - [ ] Support multi-sample analysis (check multiple fasta at the same time)
@@ -39,8 +39,12 @@
   the next k-mer from scratch
 - [ ] Create a subcommand 'stats' that parses a TAM file and report infomation about it
 - [ ] Create a subcommand 'merge' that merge TAM files
-- [ ] Create a subcommand 'fromvcf' to create a TAM file of known mutations from a VCF file
+- [x] Create a subcommand 'vcf-build' to create a TAM file of known mutations from a VCF file
 - [x] Support single nucleotides indels in 'tami build'
 - [ ] Add special treatment for removing k-mers also present in the reference when sensitive
       option is activated. We should check if there is a one-base substitution that could be better
-      than a two-base substitution.
+      than a two-base substitution. THIS IS REALLY COMPUTATIONALLY INTENSIVE, NOT SURE IF THIS
+      IS A GOOD DIRECTION TO TAKE...
+- [ ] Add a parameter in "tami build" to authorize longer deletions
+- [ ] Add a parameter in "tami build" to use a given ratio of all possible mutated k-mer o
+      verlapping a mutation instead of just one. This ratio should be 0.1 by default.
