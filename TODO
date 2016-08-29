@@ -48,3 +48,7 @@
 - [ ] Add a parameter in "tami build" to authorize longer deletions
 - [ ] Add a parameter in "tami build" to use a given ratio of all possible mutated k-mer o
       verlapping a mutation instead of just one. This ratio should be 0.1 by default.
+- [x] Compute the genotypes using LAVA mathematics
+- [ ] Add an option to retrieve reads that have matched in "tami scan". The user only need to specify, the prefix
+      because we need to handle paired-end reads.
+- [x] Remove entries that have the same reference k-mer but different positions ...

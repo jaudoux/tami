@@ -27,6 +27,7 @@ typedef khash_t(kmers) kmers_hash_t;
 #define DEFAULT_OUTPUT_NAME "kmers.tam"
 #define DEFAULT_K_LENGTH 32
 
+#define REFERENCE_KMER_CHECKED 0
 #define REFERENCE_KMER 1
 #define MUTATED_KMER 2
 #define DOUBLE_MUTATED_KMER 3
@@ -88,13 +89,27 @@ int remove_reference_kmers(char *reference_fasta, kmers_hash_t *h, int k_length)
           kmer_int = canonical_kmer(seq->seq.s, k_length, &forward_kmer_int, &reverse_kmer_int);
         }
         k = kh_get(kmers, h, kmer_int);
-        if(k != kh_end(h) && kh_value(h, k) != REFERENCE_KMER) {
-          kh_del(kmers, h, k);
-          nb_removed_kmers++;
+        if(k != kh_end(h)) {
+
+          if(kh_value(h, k) == REFERENCE_KMER) {
+            // If a reference k-mer is seen more than once, it will be deleted
+            kh_value(h, k) = REFERENCE_KMER_CHECKED;
+          } else {
+            kh_del(kmers, h, k);
+            nb_removed_kmers++;
+          }
         }
       }
     }
   }
+
+  // Reset reference k-mer checked
+  for(k = kh_begin(h); k != kh_end(h); ++k) {
+    if (!kh_exist(h, k)) continue;
+    if(kh_value(h, k) == REFERENCE_KMER_CHECKED)
+      kh_value(h, k) = REFERENCE_KMER;
+  }
+
   return nb_removed_kmers;
 }
 
@@ -287,7 +302,7 @@ int tami_vcfbuild(int argc, char *argv[]) {
     if(ref_seq->l > 0) ref_seq->l = 0;
   }
 
-  fprintf(stderr, "Number of mutations: %d\n", kv_size(tam_records));
+  fprintf(stderr, "Number of mutations: %zu\n", kv_size(tam_records));
 
   gzFile tam_file = tam_open(output_file, "wb");
 
@@ -771,7 +786,7 @@ int tami_scan(int argc, char *argv[]) {
   k_length = tam_header->k;
   kmer = malloc(k_length + 1);
 
-  printf(stderr, "Loading kmers from TAM file into memory...\n", nb_kmers);
+  fprintf(stderr, "Loading kmers from TAM file into memory...\n");
   int nb_kmers = load_kmers(tam_path, h_k, 1);
   fprintf(stderr, "%d k-mers loaded into memory\n", nb_kmers);
   gzclose(tam_file);
@@ -902,7 +917,7 @@ int tami_scan(int argc, char *argv[]) {
   fprintf(stdout, "Description=\"Total number of alternate alleles in called genotypes\">\n");
   fprintf(stdout, "##INFO=<ID=AF,Number=A,Type=Float,");
   fprintf(stdout, "Description=\"Estimated allele frequency in the range (0,1]\">\n");
-  fprintf(stdout, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n");
+  fprintf(stdout, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tNA00001\n");
 
   tam_file = tam_open(tam_path, "rb");
   tam_header_read(tam_header,tam_file);
@@ -939,7 +954,7 @@ int tami_scan(int argc, char *argv[]) {
       continue;
 
     // Compute genotypes see LAVA paper (Shajii & al 2016)
-    char GT[4] = "0|0";
+    char GT[4] = "0/0";
     double p_error = 0.01;
     long long combi_a = combi(DP, DP - AC);
     long long combi_b = combi(DP, AC);
@@ -957,10 +972,10 @@ int tami_scan(int argc, char *argv[]) {
     // double score, p;
 
     if(p_g1_C > p_g0_C && p_g1_C > p_g2_C) {
-      strcpy(GT,"0|1");
+      strcpy(GT,"0/1");
       // p = p_g1_C;
     } else if(p_g2_C > p_g0_C && p_g2_C > p_g1_C) {
-      strcpy(GT,"1|1");
+      strcpy(GT,"1/1");
       // p = p_g2_C;
     } else {
       // p = p_g0_C;
