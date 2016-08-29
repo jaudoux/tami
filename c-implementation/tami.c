@@ -771,6 +771,7 @@ int tami_scan(int argc, char *argv[]) {
   k_length = tam_header->k;
   kmer = malloc(k_length + 1);
 
+  printf(stderr, "Loading kmers from TAM file into memory...\n", nb_kmers);
   int nb_kmers = load_kmers(tam_path, h_k, 1);
   fprintf(stderr, "%d k-mers loaded into memory\n", nb_kmers);
   gzclose(tam_file);
