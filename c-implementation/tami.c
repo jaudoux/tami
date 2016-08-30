@@ -911,12 +911,11 @@ int tami_scan(int argc, char *argv[]) {
   fprintf(stdout, "##commandline=");
   for (int i = 0; i < argc; i++)
     fprintf(stdout, " %s", argv[i]);
-  fprintf(stdout, "\n##INFO=<ID=DP,Number=1,Type=Integer,");
-  fprintf(stdout, "Description=\"Total read depth at the locus\">\n");
-  fprintf(stdout, "##INFO=<ID=AC,Number=A,Type=Integer,");
-  fprintf(stdout, "Description=\"Total number of alternate alleles in called genotypes\">\n");
-  fprintf(stdout, "##INFO=<ID=AF,Number=A,Type=Float,");
-  fprintf(stdout, "Description=\"Estimated allele frequency in the range (0,1]\">\n");
+  fprintf(stdout, "\n##INFO=<ID=DP,Number=1,Type=Integer,Description=\"Total read depth at the locus\">\n");
+  fprintf(stdout, "##INFO=<ID=AF,Number=A,Type=Float,Description=\"Estimated allele frequency in the range (0,1]\">\n");
+  fprintf(stdout, "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n");
+  fprintf(stdout, "##FORMAT=<ID=RO,Number=1,Type=Integer,Description=\"Reference allele observation count\">\n");
+  fprintf(stdout, "##FORMAT=<ID=AO,Number=A,Type=Integer,Description=\"Alternate allele observation count\">\n");
   fprintf(stdout, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tNA00001\n");
 
   tam_file = tam_open(tam_path, "rb");
@@ -982,9 +981,9 @@ int tami_scan(int argc, char *argv[]) {
     }
 
     // score = p * scaling_term;
-
+    // FIXME RO is not computed right, because of the DP cumultate count for ref and other alterate alleles...
     int_to_dna(max_alt_kmer,k_length,kmer);
-    fprintf(stdout, "%s\t%d\t%s\t%s\t%s\t.\t.\tGT=%s;DP=%d;AF=%.2f;AC=%d\n", tam_header->ref[tam_record->ref_id], tam_record->pos + 1, kmer, tam_record->ref_seq, tam_record->alt_seq, GT, DP, AF, AC);
+    fprintf(stdout, "%s\t%d\t%s\t%s\t%s\t.\tPASS\tDP=%d;AF=%.2f\tGT:RO:AO\t%s:%d:%d\n", tam_header->ref[tam_record->ref_id], tam_record->pos + 1, kmer, tam_record->ref_seq, tam_record->alt_seq, DP, AF, GT, DP - AC, AC);
 
   }
   gzclose(tam_file);
