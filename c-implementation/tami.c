@@ -916,7 +916,7 @@ int tami_scan(int argc, char *argv[]) {
   fprintf(stdout, "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n");
   fprintf(stdout, "##FORMAT=<ID=RO,Number=1,Type=Integer,Description=\"Reference allele observation count\">\n");
   fprintf(stdout, "##FORMAT=<ID=AO,Number=A,Type=Integer,Description=\"Alternate allele observation count\">\n");
-  fprintf(stdout, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tNA00001\n");
+  fprintf(stdout, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tNA00001\n");
 
   tam_file = tam_open(tam_path, "rb");
   tam_header_read(tam_header,tam_file);
