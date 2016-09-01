@@ -2,7 +2,7 @@
 - [ ] support gene list as input
 - [ ] add an option to only index exonic sequences (and splice sites) instead of the whole genomic sequence
 - [ ] Support multi-sample analysis (check multiple fasta at the same time)
-- [ ] support multi-sample VCF (VCF version 4.0)
+- [x] support multi-sample VCF (VCF version 4.0)
 - [ ] Connect to Ensembl REST API (or variant.info) to annote the variants. (this could be another command...)
 - [ ] and RNA mode to index transcript sequence and not genomic sequence
 - [ ] add an option to request larger sequence than the one specified in the bed file to avoid
