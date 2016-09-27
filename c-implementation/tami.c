@@ -3,6 +3,7 @@
 #include <zlib.h>
 #include <inttypes.h>
 #include <math.h> // pow()
+#include <stdint.h>
 
 #include "kstring.h"
 #include "ksort.h"
@@ -11,18 +12,12 @@
 #include "kthread.h"
 #include "kseq.h"
 
-KSEQ_INIT(gzFile, gzread)
-KHASH_MAP_INIT_INT64(kmers, uint32_t)
-KHASH_MAP_INIT_STR(references, int32_t)
-
-typedef khash_t(kmers) kmers_hash_t;
-
 #include "api.h"
 #include "dna.h"
 #include "tam.h"
 #include "intervals.h"
 
-#define TAMI_VERSION "0.2.0"
+#define TAMI_VERSION "0.3.0"
 #define NB_THREAD_API 10
 #define DEFAULT_OUTPUT_NAME "kmers.tam"
 #define DEFAULT_K_LENGTH 32
@@ -31,6 +26,22 @@ typedef khash_t(kmers) kmers_hash_t;
 #define REFERENCE_KMER 1
 #define MUTATED_KMER 2
 #define DOUBLE_MUTATED_KMER 3
+
+KSEQ_INIT(gzFile, gzread)
+KHASH_MAP_INIT_INT64(kmers, uint32_t)
+KHASH_MAP_INIT_STR(references, int32_t)
+
+typedef khash_t(kmers) kmers_hash_t;
+
+typedef struct {
+  uint32_t count : 31;
+  uint32_t is_reference_kmer : 1;
+  uint32_t target_id;
+  uint32_t pos;
+} kmer_count_t;
+
+KHASH_MAP_INIT_INT64(kmers_count, kmer_count_t*)
+typedef khash_t(kmers_count) kmers_count_hash_t;
 
 long long combi(int n,int k) {
   long long ans = 1;
@@ -90,7 +101,6 @@ int remove_reference_kmers(char *reference_fasta, kmers_hash_t *h, int k_length)
         }
         k = kh_get(kmers, h, kmer_int);
         if(k != kh_end(h)) {
-
           if(kh_value(h, k) == REFERENCE_KMER) {
             // If a reference k-mer is seen more than once, it will be deleted
             kh_value(h, k) = REFERENCE_KMER_CHECKED;
@@ -105,7 +115,7 @@ int remove_reference_kmers(char *reference_fasta, kmers_hash_t *h, int k_length)
 
   // Reset reference k-mer checked
   for(k = kh_begin(h); k != kh_end(h); ++k) {
-    if (!kh_exist(h, k)) continue;
+    if(!kh_exist(h, k)) continue;
     if(kh_value(h, k) == REFERENCE_KMER_CHECKED)
       kh_value(h, k) = REFERENCE_KMER;
   }
@@ -113,307 +123,128 @@ int remove_reference_kmers(char *reference_fasta, kmers_hash_t *h, int k_length)
   return nb_removed_kmers;
 }
 
-int load_kmers(char *tam_path, kmers_hash_t *h, int set_to_zero) {
+int load_kmers(char *tam_path, kmers_count_hash_t *kch) {
   int ret;
   khiter_t k;
   gzFile tam_file = tam_open(tam_path, "rb");
-  tam_header_t *tam_header = tam_header_init();
-  tam_record_t *tam_record = tam_record_init();
-  if(tam_header_read(tam_header,tam_file)) {
-    kh_resize(kmers, h, kh_size(h) + tam_header->n_kmers);
-    while(tam_record_read(tam_record,tam_file)) {
-      for(int i = 0; i < tam_record->n_ref_kmers; i++) {
-        k = kh_put(kmers, h, tam_record->ref_kmers[i], &ret);
-        if(set_to_zero)
-          kh_value(h, k) = 0;
-        else
-          kh_value(h, k) = REFERENCE_KMER;
-      }
-      for(int i = 0; i < tam_record->n_alt_kmers; i++) {
-        k = kh_put(kmers, h, tam_record->alt_kmers[i], &ret);
-        if(set_to_zero)
-          kh_value(h, k) = 0;
-        else
-          kh_value(h, k) = MUTATED_KMER;
+  tam_header_t *h = tam_header_init();
+  tam_record_t *r = tam_record_init();
+  uint32_t mut_id = 0;
+  if(tam_header_read(h,tam_file)) {
+    kh_resize(kmers_count, kch, kh_size(kch) + h->n_kmers);
+    // Load ref_kmers
+    for(int i = 0; i < h->n_target; i++) {
+      tam_target_t *t = h->target[i];
+      for(int j = 0; j < t->length - h->k + 1; j++) {
+        uint64_t f_k, r_k;
+        uint64_t kmer_int = canonical_kmer(&t->seq[j],h->k,&f_k,&r_k);
+        k = kh_get(kmers_count, kch, kmer_int);
+        if(k == kh_end(kch)) {
+          kmer_count_t *kc = (kmer_count_t*)calloc(1, sizeof(kmer_count_t));
+          kc->is_reference_kmer = 1;
+          kc->target_id         = i;
+          kc->pos               = j;
+          k = kh_put(kmers_count, kch, kmer_int, &ret);
+          kh_value(kch, k) = kc;
+        }
       }
     }
-  }
-  tam_header_destroy(tam_header);
-  tam_record_destroy(tam_record);
 
-  return (int)kh_size(h);
+    // Load mutated k-mers
+    while(tam_record_read(r,tam_file)) {
+      // FIXME We should do something better than this, because we could know the exact
+      // Position of the k_mer in the genome
+      kmer_count_t *kc = (kmer_count_t*)calloc(1, sizeof(kmer_count_t));
+      kc->is_reference_kmer = 0;
+      kc->target_id         = r->target_id;
+      kc->pos               = r->pos;
+      for(int i = 0; i < r->n_alt_kmers; i++) {
+        k = kh_put(kmers_count, kch, r->alt_kmers[i], &ret);
+        kh_value(kch, k) = kc;
+      }
+      mut_id++;
+    }
+  }
+  tam_header_destroy(h);
+  tam_record_destroy(r);
+  return (int)kh_size(kch);
 }
 
-int update_tam_file(const char *tam_path, const char *new_tam_path, kmers_hash_t *h) {
+int update_tam_file(const char *tam_path, const char *new_tam_path, kmers_hash_t *hk) {
   khiter_t k;
-  gzFile tam_file     = tam_open(tam_path, "rb");
-  gzFile new_tam_file = tam_open(new_tam_path, "wb");
-  tam_header_t *tam_header = tam_header_init();
-  tam_record_t *tam_record = tam_record_init();
+  gzFile f        = tam_open(tam_path, "rb");
+  gzFile f_n      = tam_open(new_tam_path, "wb");
+  tam_header_t *h = tam_header_init();
+  tam_record_t *r = tam_record_init();
   int nb_record_removed = 0;
 
-  if(tam_header_read(tam_header,tam_file)) {
-    tam_header->n_kmers = kh_size(h);
-    tam_header_write(tam_header, new_tam_file);
-    while(tam_record_read(tam_record,tam_file)) {
-      // Verify ref_kmers
+  if(tam_header_read(h,f)) {
+    h->n_kmers = kh_size(hk);
+    // First check reference k-mers
+    for(int i = 0; i < h->n_target; i++) {
+      tam_target_t *t = h->target[i];
+
+      uint64_t ref_kmer, f_k, r_k;
+      ref_kmer = canonical_kmer(t->seq, h->k, &f_k, &r_k);
+      for (int n = 0; n < t->length - h->k + 1; n++) {
+        if(n > 0) {
+          ref_kmer = next_canonical_kmer(h->k, t->seq[n + h->k - 1], &f_k, &r_k);
+        }
+        k = kh_get(kmers, hk, ref_kmer);
+        if(k != kh_end(hk) && kh_value(hk, k) == REFERENCE_KMER) {
+          t->ref_kmers_bv[n / 8] |= 1 << n % 8;
+        } else {
+          t->ref_kmers_bv[n / 8] &= ~(1 << n % 8);
+        }
+      }
+    }
+
+    tam_header_write(h, f_n);
+
+    // Now verify alt kmers
+    while(tam_record_read(r,f)) {
       int j = 0;
-      for(int i = 0; i < tam_record->n_ref_kmers; i++) {
-        k = kh_get(kmers, h, tam_record->ref_kmers[i]);
-        if(k != kh_end(h) && kh_value(h, k) == REFERENCE_KMER)
-          tam_record->ref_kmers[j++] = tam_record->ref_kmers[i];
+      for(int i = 0; i < r->n_alt_kmers; i++) {
+        k = kh_get(kmers, hk, r->alt_kmers[i]);
+        if(k != kh_end(hk) && kh_value(hk, k) != REFERENCE_KMER)
+          r->alt_kmers[j++] = r->alt_kmers[i];
       }
-      tam_record->n_ref_kmers = j;
+      r->n_alt_kmers = j;
 
-      // Verify alt_kmers
-      j = 0;
-      for(int i = 0; i < tam_record->n_alt_kmers; i++) {
-        k = kh_get(kmers, h, tam_record->alt_kmers[i]);
-        if(k != kh_end(h) && kh_value(h, k) != REFERENCE_KMER)
-          tam_record->alt_kmers[j++] = tam_record->alt_kmers[i];
-      }
-      tam_record->n_alt_kmers = j;
-
-      if(tam_record->n_ref_kmers == 0 || tam_record->n_alt_kmers == 0)
+      // TODO we should also remove the record if it has no reference k-mers
+      if(r->n_alt_kmers == 0)
         nb_record_removed++;
       else
-        tam_record_write(tam_record, new_tam_file);
+        tam_record_write(r, f_n);
     }
   }
 
-  gzclose(tam_file);
-  gzclose(new_tam_file);
-  tam_header_destroy(tam_header);
-  tam_record_destroy(tam_record);
+  gzclose(f);
+  gzclose(f_n);
+  tam_header_destroy(h);
+  tam_record_destroy(r);
   return nb_record_removed;
-}
-
-int tami_vcfbuild(int argc, char *argv[]) {
-  char *vcf_file = NULL, *reference_fasta = NULL, *output_file = DEFAULT_OUTPUT_NAME;
-  int k_length = DEFAULT_K_LENGTH;
-
-  int c;
-  while ((c = getopt(argc, argv, "k:r:o:")) >= 0) {
-		switch (c) {
-      case 'k': k_length = atoi(optarg);  break;
-      case 'r': reference_fasta = optarg; break;
-      case 'o': output_file = optarg;     break;
-		}
-	}
-
-  if (optind == argc) {
-		fprintf(stderr, "\n");
-		fprintf(stderr, "Usage:   tami vcf-build [options] <in.vcf>\n\n");
-		fprintf(stderr, "Options: -k INT    length of k-mers (max_value: 32) [%d]\n", k_length);
-    fprintf(stderr, "         -r STR    reference FASTA (otherwise sequences are retrieved from rest.ensembl.org)\n");
-    fprintf(stderr, "         -o STR    output file (default : 'kmers.tam')\n");
-		fprintf(stderr, "\n");
-		return 1;
-	}
-
-  // verify Options
-  if(k_length > 32 || k_length < 1) {
-    fprintf(stderr, "Invalid value (%d) for k_length (-k option).\n", k_length);
-    return 1;
-  }
-
-  vcf_file = argv[optind++];
-
-  int dret, ret, ref_id, pos;
-  gzFile fp;
-  khiter_t k, k2;
-	kstream_t *ks;
-  kstring_t *str, *chr, *ref_seq;
-  tam_record_t *tam_record;// = tam_record_init();
-  tam_header_t *tam_header;
-  khash_t(references) *h_r = kh_init(references);
-  khash_t(kmers) *h_k = kh_init(kmers);
-  kvec_t(char*) reference_names;
-  kvec_t(tam_record_t*) tam_records;
-  char *kmer = malloc(k_length);
-  kseq_t *seq;
-  int l, chr_l;
-
-  kv_init(reference_names);
-  kv_init(tam_records);
-  str = calloc(1, sizeof(kstring_t));
-  chr = calloc(1, sizeof(kstring_t));
-  ref_seq = calloc(1, sizeof(kstring_t));
-
-  fp = gzopen(vcf_file, "r");
-  if(!fp) { fprintf(stderr, "Failed to open %s\n", vcf_file); exit(EXIT_FAILURE); }
-  ks = ks_init(fp);
-
-  fprintf(stderr, "Reading VCF file...\n");
-  while (ks_getuntil(ks, 0, str, &dret) >= 0) {
-
-    if(str->l > 3 && strncmp("chr", str->s, 3) == 0)
-      kputs(&str->s[3],chr);
-    else
-      kputs(str->s,chr);
-
-    k = kh_get(references, h_r, chr->s);
-    if(k == kh_end(h_r)) {
-      char *chr_cpy = malloc(strlen(chr->s) + 1);
-      strcpy(chr_cpy,chr->s);
-      kv_push(char*,reference_names,chr_cpy);
-      k = kh_put(references, h_r, chr_cpy, &ret);
-      kh_value(h_r, k) = kv_size(reference_names) - 1;
-      ref_id = kv_size(reference_names) - 1;
-    } else {
-      ref_id = kh_value(h_r, k);
-    }
-
-    if(dret != '\n' && ks_getuntil(ks, 0, str, &dret) > 0 && isdigit(str->s[0])) {
-      pos = atoi(str->s);
-      if(dret != '\n' && ks_getuntil(ks, 0, str, &dret) > 0) {
-        // TODO now STR holds the variant id
-        if(dret != '\n' && ks_getuntil(ks, 0, str, &dret) > 0) {
-          if(str->l <= k_length) {
-            kputs(str->s,ref_seq);
-            //strcpy(tam_record->ref_seq, str->s);
-            if(dret != '\n' && ks_getuntil(ks, 0, str, &dret) > 0) {
-              /* get the first token */
-              char * alt = strtok(str->s, ",");
-              /* walk through other tokens */
-              while( alt != NULL )
-              {
-                if(strlen(alt) <= k_length) {
-                  tam_record = tam_record_init();
-                  tam_record->ref_id = ref_id;
-                  tam_record->pos    = pos - 1; // VCF are 1-based
-                  tam_record->ref_seq = malloc(ref_seq->l + 1);
-                  tam_record->alt_seq = malloc(strlen(alt) + 1);
-                  strcpy(tam_record->ref_seq, ref_seq->s);
-                  strcpy(tam_record->alt_seq, alt);
-                  kv_push(tam_record_t*,tam_records,tam_record);
-                }
-                alt = strtok(NULL, ",");
-              }
-            }
-          }
-        }
-      }
-    }
-    // skip the rest of the line
-		if (dret != '\n') while ((dret = ks_getc(ks)) > 0 && dret != '\n');
-    // release the current chr
-    if(chr->l > 0)     chr->l = 0;
-    if(ref_seq->l > 0) ref_seq->l = 0;
-  }
-
-  fprintf(stderr, "Number of mutations: %zu\n", kv_size(tam_records));
-
-  gzFile tam_file = tam_open(output_file, "wb");
-
-  // Set the TAM header
-  tam_header = tam_header_init();
-  tam_header->k = k_length;
-  tam_header->n_kmers = kv_size(tam_records)*2;
-  tam_header->n_ref = kv_size(reference_names);
-  tam_header->ref = (char**)malloc(sizeof(char**) * tam_header->n_ref);
-  for(int i = 0; i < kv_size(reference_names); i++) {
-    tam_header->ref[i] = malloc(strlen(kv_A(reference_names,i)) + 1);
-    strcpy(tam_header->ref[i], kv_A(reference_names,i));
-  }
-  tam_header_write(tam_header, tam_file);
-
-
-  fprintf(stderr, "Load sequences from %s...\n", reference_fasta);
-  fp = gzopen(reference_fasta, "r");
-  if(!fp) { fprintf(stderr, "Failed to open %s\n", reference_fasta); exit(EXIT_FAILURE); }
-  seq = kseq_init(fp);
-  while ((l = kseq_read(seq)) >= 0) {
-    k = kh_get(references, h_r, seq->name.s);
-    if(k != kh_end(h_r)) {
-      ref_id = kh_value(h_r, k);
-      chr_l = strlen(seq->seq.s);
-      for(int i = 0; i < kv_size(tam_records); i++) {
-        tam_record = kv_A(tam_records, i);
-        if(tam_record && tam_record->ref_id == ref_id && (tam_record->pos - k_length) < chr_l) {
-          int ref_l = strlen(tam_record->ref_seq), alt_l = strlen(tam_record->alt_seq);
-          uint64_t _for,_rev;
-
-          // Allocate one ref and alt kmers
-          tam_record->ref_kmers   = malloc(sizeof(uint64_t));
-          tam_record->alt_kmers   = malloc(sizeof(uint64_t));
-          tam_record->n_ref_kmers = 1;
-          tam_record->n_alt_kmers = 1;
-
-          // First set the ref_kmer
-          strncpy(kmer, &seq->seq.s[tam_record->pos - (k_length - strlen(tam_record->ref_seq)) / 2], k_length);
-          tam_record->ref_kmers[0] = canonical_kmer(kmer, k_length, &_for, &_rev);
-
-          // The set the alt_kmer
-          int before_length = (k_length - alt_l) / 2;
-          if(before_length > 0)
-            strncpy(kmer, &seq->seq.s[tam_record->pos - before_length], before_length);
-          strncpy(&kmer[before_length], tam_record->alt_seq, alt_l);
-          before_length += alt_l;
-          strncpy(&kmer[before_length], &seq->seq.s[tam_record->pos + ref_l], k_length - before_length);
-          tam_record->alt_kmers[0] = canonical_kmer(kmer, k_length, &_for, &_rev);
-
-          k   = kh_get(kmers, h_k, tam_record->ref_kmers[0]);
-          k2  = kh_get(kmers, h_k, tam_record->alt_kmers[0]);
-
-          // No matter what, if the alt_kmers already exists, we skip this variant.
-          if(k2 != kh_end(h_k)) {
-            // If this alt k_mer correspond to two different variants, we
-            // removed it, in order to remove the other variant.
-            if(kh_value(h_k, k2) != REFERENCE_KMER) {
-              kh_del(kmers, h_k, k2);
-            }
-          } else {
-            if(k == kh_end(h_k)) {
-              k = kh_put(kmers, h_k, tam_record->ref_kmers[0], &ret);
-            }
-            kh_value(h_k, k) = REFERENCE_KMER;
-            k2 = kh_put(kmers, h_k, tam_record->alt_kmers[0], &ret);
-            kh_value(h_k, k2) = MUTATED_KMER;
-            tam_record_write(tam_record, tam_file);
-          }
-          tam_record_destroy(tam_record); // release the memory for this record
-          // fprintf(stderr, "%s\t%d\t%s\t%s\n", reference_names.a[tam_record->ref_id], tam_record->pos, tam_record->ref_seq, tam_record->alt_seq);
-        }
-      }
-    }
-  }
-  gzclose(tam_file);
-  kv_destroy(tam_records);
-  kv_destroy(reference_names);
-  tam_header_destroy(tam_header);
-
-  // fprintf(stderr, "Create mutated k-mer hash...\n");
-  // load_kmers(output_file, h_k, 0);
-  fprintf(stderr, "Remove mutated k-mers that are also located on the reference (this may take a while)...\n");
-  int nb_removed_kmers  = remove_reference_kmers(reference_fasta, h_k, k_length);
-  fprintf(stderr, "%d mutated kmers have been removed\n", nb_removed_kmers);
-  char *tmp_output_file = get_tmp_filename(output_file);
-  fprintf(stderr, "Updating the TAM file...\n");
-  int nb_record_removed = update_tam_file(output_file,tmp_output_file,h_k);
-  fprintf(stderr, "%d records have been removed\n", nb_record_removed);
-  rename(tmp_output_file, output_file);
-
-  return 0;
 }
 
 int tami_build(int argc, char *argv[]) {
   char *bed_file = NULL, *reference_fasta = NULL, *output_file = DEFAULT_OUTPUT_NAME;
-  int use_derived_kmers = 0;
+  // int use_derived_kmers = 0;
   int handle_insertions = 0;
   int handle_deletions  = 0;
   int indel_padding     = 4;
+  int kmer_sampling     = 3;
   int k_length          = DEFAULT_K_LENGTH;
-  int k_middle          = k_length / 2;
+  int target_padding    = k_length;
   int debug = 0;
 
   int c;
-  while ((c = getopt(argc, argv, "disk:r:o:")) >= 0) {
+  while ((c = getopt(argc, argv, "disk:r:o:n:")) >= 0) {
 		switch (c) {
       case 'k': k_length = atoi(optarg); break;
       case 'r': reference_fasta = optarg; break;
-      case 's': use_derived_kmers = 1; break;
+      // case 's': use_derived_kmers = 1; break;
       case 'o': output_file = optarg; break;
+      case 'n': kmer_sampling = atoi(optarg); break;
       case 'i': handle_deletions = 1; handle_insertions = 1; break;
       case 'd': debug = 1; break;
 		}
@@ -424,10 +255,12 @@ int tami_build(int argc, char *argv[]) {
 		fprintf(stderr, "Usage:   tami build [options] <in.bed>\n\n");
 		fprintf(stderr, "Options: -k INT    length of k-mers (max_value: 32) [%d]\n", k_length);
     fprintf(stderr, "         -r STR    reference FASTA (otherwise sequences are retrieved from rest.ensembl.org)\n");
+    fprintf(stderr, "         -n INT    number of overlapping k-mer [%d]\n", kmer_sampling);
+    fprintf(stderr, "         -p INT    target padding [%d]\n", target_padding);
     fprintf(stderr, "         -i        support 1-nt indels\n");
-    fprintf(stderr, "         -s        sensitive mode (able 2 mutation per-kmer)\n");
-    fprintf(stderr, "                   Warning : important memory overload and possible loss of accuracy,\n");
-    fprintf(stderr, "                             this option is only adviced for amplicon sequencing.\n");
+    // fprintf(stderr, "         -s        sensitive mode (able 2 mutation per-kmer)\n");
+    // fprintf(stderr, "                   Warning : important memory overload and possible loss of accuracy,\n");
+    // fprintf(stderr, "                             this option is only adviced for amplicon sequencing.\n");
     fprintf(stderr, "         -o STR    output file (default : 'kmers.tam')\n");
     fprintf(stderr, "         -d        debug mode\n");
 		fprintf(stderr, "\n");
@@ -446,12 +279,15 @@ int tami_build(int argc, char *argv[]) {
     fprintf(stderr, "Bed file is: %s\n",bed_file);
   }
 
+  int k_middle          = k_length / 2;
+  int k_jump            = k_length / (kmer_sampling - 1);
+
   interval_t *interval;
   tam_header_t *tam_header = tam_header_init();
   tam_record_t *tam_record = tam_record_init();
   interval_array_t *interval_array = interval_array_init();
   kvec_t(char*) reference_names;
-  khiter_t k, k2;
+  khiter_t k;//, k2;
   khash_t(kmers) *h_k = kh_init(kmers);
   khash_t(references) *h_r = kh_init(references);
   char *tmp_output_file;
@@ -479,7 +315,8 @@ int tami_build(int argc, char *argv[]) {
     }
   }
 
-  merge_overlapping_intervals(interval_array);
+  int nb_merged = merge_overlapping_intervals(interval_array);
+  fprintf(stderr, "%d overlapping intervals have been merged\n", nb_merged);
 
   /*****************************************************************************
   *                  LOAD SEQUENCES FROM FASTA OR ENSEMBL API
@@ -500,8 +337,7 @@ int tami_build(int argc, char *argv[]) {
   *****************************************************************************/
 
   fprintf(stderr, "Create mutated k-mer hash...\n");
-
-  int ref_kmer_pos, prev_ref_kmer_pos, mut_pos, pos, ref_id;
+  int ref_kmer_pos, mut_pos;
   char ref_nuc;
   uint64_t ref_kmer, mut_kmer, reverse_mut_kmer, forward_ref_kmer = 0, reverse_ref_kmer = 0;
 
@@ -517,96 +353,161 @@ int tami_build(int argc, char *argv[]) {
     tam_header->ref[i] = malloc(strlen(kv_A(reference_names,i)) + 1);
     strcpy(tam_header->ref[i], kv_A(reference_names,i));
   }
-  tam_header_write(tam_header, tam_file);
+  kv_destroy(reference_names);
 
-  if(!tam_record->ref_kmers) tam_record->ref_kmers   = malloc(sizeof(uint64_t));
-  if(!tam_record->alt_kmers) tam_record->alt_kmers   = malloc(sizeof(uint64_t));
-  if(!tam_record->ref_seq)   tam_record->ref_seq     = malloc(255);
-  if(!tam_record->alt_seq)   tam_record->alt_seq     = malloc(255);
-  tam_record->n_ref_kmers = 1;
-  tam_record->n_alt_kmers = 1;
-  // tam_record->ref_seq_l   = 1;
-  // tam_record->alt_seq_l   = 1;
-
-  // Loop over the interval array and print sequences
+  tam_header->n_target = 0;
+  tam_header->target   = malloc(kv_size(*interval_array) * sizeof(tam_target_t*));
   for(int i = 0; i < kv_size(*interval_array); i++) {
     interval = kv_A(*interval_array,i);
-
     if(!interval->seq) {
       fprintf(stderr, "No sequence found for interval %s:%d-%d\n", interval->chr, interval->start, interval->end);
       continue;
     }
-
-    if(debug)
-      fprintf(stderr, ">%s:%d..%d\n%s\n", interval->chr, interval->start, interval->end, interval->seq);
-
-    size_t seq_length = strlen(interval->seq);
-    if(seq_length < k_length)
+    if(interval_length(interval) < k_length) {
       fprintf(stderr, "Sequence length is smaller than k-mer length, skipping.\n");
+      continue;
+    }
+    tam_target_t *t = tam_target_init();
+    t->ref_id = kh_value(h_r, kh_get(references, h_r, interval->chr));
+    t->pos    = interval->start;
+    t->length = interval_length(interval);
+    t->seq    = interval->seq;
+    t->ref_kmers_bv = calloc(t->length/8+1,8);
+    tam_header->target[tam_header->n_target++] = t;
+    interval->seq = NULL; // release seq string given to the target
+  }
+  interval_array_destroy(interval_array);
 
-    ref_kmer = canonical_kmer(interval->seq, k_length, &forward_ref_kmer, &reverse_ref_kmer);
-    prev_ref_kmer_pos = 0;
-    ref_id = kh_value(h_r, kh_get(references, h_r, interval->chr));
+  tam_header_write(tam_header, tam_file);
 
-    for (int n = 0; n < seq_length; n++) {
+  tam_record->alt_kmers   = malloc(sizeof(uint64_t)*kmer_sampling);
+  tam_record->alt_seq     = malloc(k_length);
 
-      // Case of the left extremity where the mutated position is not the center of the k-mer
-      if(n < k_middle) {
-        ref_kmer_pos  = 0;
-        mut_pos       = n;
-      // Case of the right extremity where the mutated position is not the center of the k-mer
-      } else if(n >= seq_length - k_middle) {
-        ref_kmer_pos  = seq_length - k_length;
-        mut_pos       = k_length + n - seq_length;
-      // Default case, the mutated position is the center of the k-mer
+  for(int i = 0; i < tam_header->n_target; i++) {
+    tam_target_t *t = tam_header->target[i];
+    // Compute all ref kmers
+    uint64_t *ref_kmers = malloc(sizeof(uint64_t) * (t->length - k_length + 1));
+    uint64_t *forward_ref_kmers = malloc(sizeof(uint64_t) * (t->length - k_length + 1));
+    ref_kmer = canonical_kmer(t->seq, k_length, &forward_ref_kmer, &reverse_ref_kmer);
+    ref_kmers[0] = ref_kmer;
+    forward_ref_kmers[0] = forward_ref_kmer;
+    for (int n = 0; n < t->length - k_length + 1; n++) {
+      if(n > 0) {
+        ref_kmers[n] = next_canonical_kmer(k_length, t->seq[n + k_length - 1], &forward_ref_kmer, &reverse_ref_kmer);
+        forward_ref_kmers[n] = forward_ref_kmer;
+      }
+      if(kh_get(kmers, h_k, ref_kmers[n]) == kh_end(h_k)) {
+        k = kh_put(kmers, h_k, ref_kmers[n], &ret);
+        kh_value(h_k, k) = REFERENCE_KMER;
+      }
+    }
+    tam_record->target_id = i;
+
+    // Loop over all positions in the sequences
+    for (int n = 0; n < t->length; n++) {
+      ref_nuc = t->seq[n];
+
+      // Handle 1-nt substitutions
+      tam_record->pos           = n;
+      tam_record->ref_seq_l = 1;
+      tam_record->alt_seq_l = 1;
+
+      for(int p = 0; p < NB_NUCLEOTIDES; p++) {
+        if(NUCLEOTIDES[p] != ref_nuc) {
+          strncpy(tam_record->alt_seq, &NUCLEOTIDES[p], 1);
+          tam_record->alt_seq[1] = '\0';
+          tam_record->n_alt_kmers = 0;
+
+          // Loop over all overlapping k-mers given the sampling rate
+          for (int j = 0; j <= k_length; j += k_jump) {
+
+            // Set the mut_pos to the last nucleotide of the k_mer if j is larger
+            // than k_length. This happens for the last k-mer when k is even
+            if(j == k_length) {
+              ref_kmer_pos = n - k_length + 1;
+              mut_pos      = k_length - 1;
+            } else {
+              ref_kmer_pos  = n - j;
+              mut_pos       = j;
+            }
+
+            // The k-mer is not completely included in the reference sequence
+            if(ref_kmer_pos >= 0 && ref_kmer_pos + k_length <= t->length) {
+              ref_kmer                    = ref_kmers[ref_kmer_pos];
+              forward_ref_kmer            = forward_ref_kmers[ref_kmer_pos];
+
+              // Mut the ref k-mer
+              mut_kmer = mut_int_dna(forward_ref_kmer, k_length, mut_pos, NUCLEOTIDES[p]);
+              reverse_mut_kmer = int_revcomp(mut_kmer, k_length);
+              if(reverse_mut_kmer < mut_kmer)
+                mut_kmer = reverse_mut_kmer;
+
+              // Add the mut k-mer if it is not already in the hash
+              k = kh_get(kmers, h_k, mut_kmer);
+              if(k == kh_end(h_k)) {
+                k = kh_put(kmers, h_k, mut_kmer, &ret);
+                kh_value(h_k, k) = MUTATED_KMER;
+                tam_record->alt_kmers[tam_record->n_alt_kmers++]  = mut_kmer;
+              } else {
+                kh_del(kmers, h_k, k);
+              }
+            }
+          }
+          // Print the record in the tam file if it has at least one ref and
+          // on alt k-mer
+          if(tam_record->n_alt_kmers > 0)
+            tam_record_write(tam_record, tam_file);
+        }
+      }
+
+      // Set ref_kmer_pos and mut_pos for indels
+      if(n >= k_middle) {
+        if (n < t->length - k_middle) {
+          ref_kmer_pos = n - k_middle;
+          mut_pos      = k_middle;
+        } else {
+          ref_kmer_pos = t->length - k_length;
+          mut_pos      = k_length + n - t->length;
+        }
       } else {
-        ref_kmer_pos  = n - k_middle;
-        mut_pos       = k_middle;
+        ref_kmer_pos = 0;
+        mut_pos      = n;
       }
 
-      pos = interval->start + ref_kmer_pos + mut_pos;
-      ref_nuc = interval->seq[mut_pos + ref_kmer_pos];
-
-      if(ref_kmer_pos > prev_ref_kmer_pos) {
-        ref_kmer = next_canonical_kmer(k_length, interval->seq[ref_kmer_pos + k_length - 1], &forward_ref_kmer, &reverse_ref_kmer);
-        prev_ref_kmer_pos = ref_kmer_pos;
-      }
-
-      tam_record->ref_id        = ref_id;
-      tam_record->ref_kmers[0]  = ref_kmer;
+      tam_record->n_alt_kmers   = 1;
 
       // Handle 1-nt deletion
       // FIXME we should verify that a stretch of nuclotide does not stretch to
       // the end of the k-mer. Same for insertions
       // We should also set the ref_seq and alt_seq to include the whole stretch
       // as in free-bayes
-      if(handle_deletions && mut_pos >= indel_padding && mut_pos < (k_length - indel_padding - 1) &&
-         interval->seq[mut_pos + ref_kmer_pos] != interval->seq[mut_pos + ref_kmer_pos - 1]) {
-        memcpy(kmer,           &interval->seq[ref_kmer_pos],               mut_pos);
-        memcpy(&kmer[mut_pos], &interval->seq[ref_kmer_pos + mut_pos + 1], k_length - mut_pos);
+      if(handle_deletions && n >= indel_padding && n < (t->length - indel_padding - 1) &&
+      t->seq[n] != t->seq[n - 1]) {
+        memcpy(kmer,           &t->seq[ref_kmer_pos],               mut_pos);
+        memcpy(&kmer[mut_pos], &t->seq[ref_kmer_pos + mut_pos + 1], k_length - mut_pos);
         uint64_t _for,_rev;
         mut_kmer = canonical_kmer(kmer, k_length, &_for, &_rev);
-        tam_record->pos           = pos - 1;
+        tam_record->pos           = n - 1;
+        tam_record->ref_seq_l     = 2;
+        tam_record->alt_seq_l     = 1;
         if(kh_get(kmers, h_k, mut_kmer) == kh_end(h_k)) {
           k = kh_put(kmers, h_k, mut_kmer, &ret);
           kh_value(h_k, k) = MUTATED_KMER;
           tam_record->alt_kmers[0]  = mut_kmer;
-          memcpy(tam_record->ref_seq, &interval->seq[ref_kmer_pos + mut_pos - 1], 2);
-          tam_record->ref_seq[2] = '\0';
-          memcpy(tam_record->alt_seq, tam_record->ref_seq, 1);
+          tam_record->alt_seq[0] = t->seq[ref_kmer_pos + mut_pos];
           tam_record->alt_seq[1] = '\0';
           tam_record_write(tam_record, tam_file);
         }
       }
 
       // Handle 1-nt insertion
-      if(handle_insertions && mut_pos >= indel_padding && mut_pos < (k_length - indel_padding - 1)) {
-        memcpy(kmer,           &interval->seq[ref_kmer_pos],               mut_pos);
-        memcpy(&kmer[mut_pos + 1], &interval->seq[ref_kmer_pos + mut_pos], k_length - mut_pos - 1);
-        memcpy(tam_record->ref_seq, &kmer[mut_pos - 1], 1);
+      if(handle_insertions && mut_pos >= indel_padding && n < (t->length - indel_padding - 1)) {
+        memcpy(kmer,           &t->seq[ref_kmer_pos],               mut_pos);
+        memcpy(&kmer[mut_pos + 1], &t->seq[ref_kmer_pos + mut_pos], k_length - mut_pos - 1);
         uint64_t _for,_rev;
-        tam_record->ref_seq[1] = '\0';
-        tam_record->pos           = pos - 1;
+        tam_record->pos           = n - 1;
+        tam_record->ref_seq_l     = 1;
+        tam_record->alt_seq_l     = 2;
         for(int p = 0; p < NB_NUCLEOTIDES; p++) {
           if(NUCLEOTIDES[p] != kmer[mut_pos - 1]) {
             kmer[mut_pos] = NUCLEOTIDES[p];
@@ -616,91 +517,64 @@ int tami_build(int argc, char *argv[]) {
               k = kh_put(kmers, h_k, mut_kmer, &ret);
               kh_value(h_k, k) = MUTATED_KMER;
               tam_record->alt_kmers[0]  = mut_kmer;
-              memcpy(tam_record->alt_seq, &kmer[mut_pos - 1], 2);
-              tam_record->ref_seq[2] = '\0';
+              strncpy(tam_record->alt_seq, &kmer[mut_pos - 1], 2);
               tam_record_write(tam_record, tam_file);
             }
           }
         }
       }
-
-      // Handle 1-nt substitution
-      strncpy(tam_record->ref_seq, &ref_nuc, 1);
-      tam_record->ref_seq[1] = '\0';
-      tam_record->pos           = pos;
-
-      for(int p = 0; p < NB_NUCLEOTIDES; p++) {
-        if(NUCLEOTIDES[p] != ref_nuc) {
-          mut_kmer = mut_int_dna(forward_ref_kmer, k_length, mut_pos, NUCLEOTIDES[p]);
-          reverse_mut_kmer = int_revcomp(mut_kmer, k_length);
-          if(reverse_mut_kmer < mut_kmer)
-            mut_kmer = reverse_mut_kmer;
-
-          if(kh_get(kmers, h_k, mut_kmer) == kh_end(h_k)) {
-            k = kh_put(kmers, h_k, mut_kmer, &ret);
-          	kh_value(h_k, k) = MUTATED_KMER;
-            strncpy(tam_record->alt_seq, &NUCLEOTIDES[p], 1);
-            tam_record->alt_seq[1] = '\0';
-            tam_record->alt_kmers[0]  = mut_kmer;
-            tam_record_write(tam_record, tam_file);
-          }
-        } else {
-          if(kh_get(kmers, h_k, ref_kmer) == kh_end(h_k)) {
-            k = kh_put(kmers, h_k, ref_kmer, &ret);
-          	kh_value(h_k, k) = REFERENCE_KMER;
-          }
-        }
-      }
     }
-    //interval_destroy(interval);
+    free(ref_kmers);
+    free(forward_ref_kmers);
   }
   gzclose(tam_file);
 
 
-  /*****************************************************************************
-  *                          ADD 2-nt MUTATED K-MER
-  *                             (sensitive mode)
-  *****************************************************************************/
-
-  if(use_derived_kmers) {
-    // We update the size of the hash to fit the derived kmers. Theoritically, it should
-    // kh_size * k * 3, but we in practice it will be closer to a factor 2.
-    kh_resize(kmers, h_k, kh_size(h_k)*k_length*2);
-    fprintf(stderr, "Create 2-nuc mutated k-mer (-s option)...\n");
-    // Add all derived k-mer with one more mutation
-    tam_file = tam_open(output_file, "rb");
-    gzFile tam_file_alt = tam_open(tmp_output_file, "wb");
-
-    if(tam_header_read(tam_header,tam_file)) {
-
-      tam_header->n_kmers = kh_size(h_k);
-      tam_header_write(tam_header, tam_file_alt);
-
-      while(tam_record_read(tam_record,tam_file)) {
-        if(tam_record->n_alt_kmers == 1) {
-          tam_record->alt_kmers = realloc(tam_record->alt_kmers, sizeof(uint64_t) * k_length * (NB_NUCLEOTIDES - 1) + 1);
-
-          for (int n = 0; n < k_length; n++) {
-            ref_nuc = nuc_from_int_dna(tam_record->alt_kmers[0], k_length, n);
-            for(int p = 0; p < NB_NUCLEOTIDES; p++) {
-              if(ref_nuc != NUCLEOTIDES[p]) {
-                mut_kmer = mut_int_dna(tam_record->alt_kmers[0], k_length, n,  NUCLEOTIDES[p]);
-                if(kh_get(kmers, h_k, mut_kmer) == kh_end(h_k)) {
-                  k2 = kh_put(kmers, h_k, mut_kmer, &ret);
-                  kh_value(h_k, k2) = DOUBLE_MUTATED_KMER;
-                  tam_record->alt_kmers[tam_record->n_alt_kmers++] = mut_kmer;
-                }
-              }
-            }
-          }
-          tam_record_write(tam_record,tam_file_alt);
-        }
-      }
-    }
-    gzclose(tam_file);
-    gzclose(tam_file_alt);
-    rename(tmp_output_file, output_file);
-  }
+  // /*****************************************************************************
+  // *                          ADD 2-nt MUTATED K-MER
+  // *                             (sensitive mode)
+  // *****************************************************************************/
+  //
+  // if(use_derived_kmers) {
+  //   // We update the size of the hash to fit the derived kmers. Theoritically, it should
+  //   // kh_size * k * 3, but we in practice it will be closer to a factor 2.
+  //   kh_resize(kmers, h_k, kh_size(h_k)*k_length*2);
+  //   fprintf(stderr, "Create 2-nuc mutated k-mer (-s option)...\n");
+  //   // Add all derived k-mer with one more mutation
+  //   tam_file = tam_open(output_file, "rb");
+  //   gzFile tam_file_alt = tam_open(tmp_output_file, "wb");
+  //
+  //   if(tam_header_read(tam_header,tam_file)) {
+  //
+  //     tam_header->n_kmers = kh_size(h_k);
+  //     tam_header_write(tam_header, tam_file_alt);
+  //
+  //     while(tam_record_read(tam_record,tam_file)) {
+  //       if(tam_record->n_alt_kmers == 1) {
+  //         tam_record->alt_kmers = realloc(tam_record->alt_kmers, sizeof(uint64_t) * k_length * (NB_NUCLEOTIDES - 1) + 1);
+  //
+  //         for (int n = 0; n < k_length; n++) {
+  //           ref_nuc = nuc_from_int_dna(tam_record->alt_kmers[0], k_length, n);
+  //           for(int p = 0; p < NB_NUCLEOTIDES; p++) {
+  //             if(ref_nuc != NUCLEOTIDES[p]) {
+  //               mut_kmer = mut_int_dna(tam_record->alt_kmers[0], k_length, n,  NUCLEOTIDES[p]);
+  //               if(kh_get(kmers, h_k, mut_kmer) == kh_end(h_k)) {
+  //                 k2 = kh_put(kmers, h_k, mut_kmer, &ret);
+  //                 kh_value(h_k, k2) = DOUBLE_MUTATED_KMER;
+  //                 tam_record->alt_kmers[tam_record->n_alt_kmers++] = mut_kmer;
+  //               }
+  //             }
+  //           }
+  //         }
+  //         tam_record_write(tam_record,tam_file_alt);
+  //       }
+  //     }
+  //   }
+  //   gzclose(tam_file);
+  //   gzclose(tam_file_alt);
+  //   rename(tmp_output_file, output_file);
+  // }
+  //
 
   /*****************************************************************************
   *             REMOVE MUTATED K-MER ALSO FOUND ON THE REFERENCE
@@ -717,11 +591,8 @@ int tami_build(int argc, char *argv[]) {
     rename(tmp_output_file, output_file);
   }
 
-  kv_destroy(*interval_array);
-  kv_destroy(reference_names);
   tam_header_destroy(tam_header);
   tam_record_destroy(tam_record);
-  //interval_array_destroy(interval_array); // FIXME THERE IS A PROBLEM WITH A DOUBLE FREE
 	return 0;
 }
 
@@ -776,8 +647,8 @@ int tami_scan(int argc, char *argv[]) {
   tam_header_t *tam_header = tam_header_init();
   tam_record_t *tam_record = tam_record_init();
   gzFile  tam_file = tam_open(tam_path, "rb");
-  khiter_t k, k2;
-  khash_t(kmers) *h_k = kh_init(kmers);
+  khiter_t k;
+  khash_t(kmers_count) *h_k = kh_init(kmers_count);
   char *kmer;
   int k_length;
   gzFile fp;
@@ -785,22 +656,15 @@ int tami_scan(int argc, char *argv[]) {
   tam_header_read(tam_header,tam_file);
   k_length = tam_header->k;
   kmer = malloc(k_length + 1);
+  gzclose(tam_file);
 
   fprintf(stderr, "Loading kmers from TAM file into memory...\n");
-  int nb_kmers = load_kmers(tam_path, h_k, 1);
+  int nb_kmers = load_kmers(tam_path, h_k);
   fprintf(stderr, "%d k-mers loaded into memory\n", nb_kmers);
-  gzclose(tam_file);
 
   /*****************************************************************************
   *                             SCAN FASTQ FILES
   *****************************************************************************/
-
-  // Set all counters to 0
-  // FIXME This should not be necessary given the load_kmers parameters
-  for(k = kh_begin(h_k); k != kh_end(h_k); ++k) {
-    if (!kh_exist(h_k, k)) continue;
-    kh_value(h_k, k) = 0;
-  }
 
   while(optind < argc) {
     fastq_file = argv[optind++];
@@ -808,22 +672,41 @@ int tami_scan(int argc, char *argv[]) {
 
     kseq_t *seq;
     int l;
-    uint64_t kmer_int, forward_kmer_int = 0, reverse_kmer_int = 0;
+    uint64_t kmer_int, f_k = 0, r_k = 0;
     int nb_reads = 0;
     fp = gzopen(fastq_file, "r");
     seq = kseq_init(fp);
     while ((l = kseq_read(seq)) >= 0) {
+      uint64_t prev_target_id = UINT64_MAX, prev_pos = UINT64_MAX;
+      uint32_t prev_is_reference_kmer = 0;
       nb_reads++;
       if(seq->seq.l >= k_length) {
         for(int i = 0; i < seq->seq.l - k_length + 1; i++) {
           if(i > 0) {
-            kmer_int = next_canonical_kmer(k_length, seq->seq.s[i + k_length - 1], &forward_kmer_int, &reverse_kmer_int);
+            kmer_int = next_canonical_kmer(k_length, seq->seq.s[i + k_length - 1], &f_k, &r_k);
           } else {
-            kmer_int = canonical_kmer(seq->seq.s, k_length, &forward_kmer_int, &reverse_kmer_int);
+            kmer_int = canonical_kmer(seq->seq.s, k_length, &f_k, &r_k);
           }
-          k = kh_get(kmers, h_k, kmer_int);
+          k = kh_get(kmers_count, h_k, kmer_int);
           if(k != kh_end(h_k)) {
-            kh_value(h_k, k) = kh_value(h_k, k) + 1;
+            kmer_count_t *kc = (kmer_count_t*)kh_value(h_k, k);
+            // TODO we could add some "pseudo-mapping" procedure to only count mutated k-mers
+            // if a reference_kmer for mapping to the same loci is found in the read
+            if(kc->is_reference_kmer) {
+              // Only update the k_mer if the previous matched one was further that k
+              if(!prev_is_reference_kmer || (prev_is_reference_kmer && (prev_target_id != kc->target_id || kc->pos - prev_pos >= k_length))) {
+                kc->count++;
+                prev_is_reference_kmer = 1;
+                prev_target_id         = kc->target_id;
+                prev_pos               = kc->pos;
+              }
+              // Only update the k-mer if the previous matched one was not the same mutation
+            } else if(prev_target_id != kc->target_id || kc->pos != prev_pos) {
+              kc->count++;
+              prev_is_reference_kmer = 0;
+              prev_target_id         = kc->target_id;
+              prev_pos               = kc->pos;
+            }
           }
         }
       }
@@ -836,70 +719,35 @@ int tami_scan(int argc, char *argv[]) {
     gzclose(fp);
   }
 
-  /*****************************************************************************
-  *                             UPDATE COUNTS
-  *****************************************************************************/
-
-  fprintf(stderr, "Update counts...\n");
-  tam_file = tam_open(tam_path, "rb");
-  tam_header_read(tam_header,tam_file);
-  while(tam_record_read(tam_record,tam_file)) {
-    for(int i = 0; i < tam_record->n_ref_kmers; i++) {
-      k = kh_get(kmers, h_k, tam_record->ref_kmers[i]);
+  // Compute coverage for each target
+  uint32_t **target_coverage = calloc(tam_header->n_target, sizeof(uint32_t*));
+  for(int i = 0; i < tam_header->n_target; i++) {
+    tam_target_t *t = tam_header->target[i];
+    target_coverage[i] = calloc(t->length,sizeof(uint32_t));
+    uint64_t f_k, r_k;
+    for(int j = 0; j < t->length - tam_header->k + 1; j++) {
+      uint64_t kmer_int = canonical_kmer(&t->seq[j], tam_header->k, &f_k, &r_k);
+      k = kh_get(kmers_count, h_k, kmer_int);
       if(k != kh_end(h_k)) {
-        for(int j = 0; j < tam_record->n_alt_kmers; j++) {
-          k2 = kh_get(kmers, h_k, tam_record->alt_kmers[j]);
-          if(k2 != kh_end(h_k))
-            kh_value(h_k, k) = kh_value(h_k, k) + kh_value(h_k, k2);
+        kmer_count_t *kc = (kmer_count_t*)kh_value(h_k, k);
+        for(int n = 0; n < tam_header->k; n++) {
+          target_coverage[i][j+n] += kc->count;
         }
       }
     }
   }
-  gzclose(tam_file);
 
-  // Compute mean coverage
-  // int x = 0;
-  // int y = 0;
-  // int N = 0;
-  //
-  // tam_file = tam_open(tam_path, "rb");
-  // tam_header_read(tam_header,tam_file);
-  // while(tam_record_read(tam_record,tam_file)) {
-  //   for(int i = 0; i < tam_record->n_ref_kmers; i++) {
-  //     if(tam_record->ref_kmers[i] > 0) {
-  //       N++;
-  //       break;
-  //     }
-  //   }
-  // }
-  // gzclose(tam_file);
-  //
-  // tam_file = tam_open(tam_path, "rb");
-  // tam_header_read(tam_header,tam_file);
-  // while(tam_record_read(tam_record,tam_file)) {
-  //   int DP = 0;
-  //   for(int i = 0; i < tam_record->n_ref_kmers; i++) {
-  //     k = kh_get(kmers, h_k, tam_record->ref_kmers[i]);
-  //     if(k != kh_end(h_k)) {
-  //       DP += kh_val(h_k, k);
-  //     }
-  //   }
-  //   if(DP > 0) {
-  //     x += DP / N;
-  //     int b = DP % N;
-  //     if (y >= N - b) {
-  //       x++;
-  //       y -= N - b;
-  //     } else {
-  //       y += b;
-  //     }
-  //   }
-  // }
-  // gzclose(tam_file);
-  //
-  // double mean_coverage =  x + y / N;
-  // fprintf(stderr, "Mean coverage: %.2f\n", mean_coverage);
-  // double negative_mean_coverage_exp = exp(-1 * mean_coverage);
+  // TODO add mutated k-mer to coverage !!
+  tam_file = tam_open(tam_path, "rb");
+  tam_header_read(tam_header,tam_file);
+  while(tam_record_read(tam_record,tam_file)) {
+    k = kh_get(kmers_count, h_k, tam_record->alt_kmers[0]);
+    if(k != kh_end(h_k)) {
+      kmer_count_t *kc = (kmer_count_t*)kh_value(h_k, k);
+      target_coverage[tam_record->target_id][tam_record->pos] += kc->count;
+    }
+  }
+  gzclose(tam_file);
 
   /*****************************************************************************
   *                             PRINT OUTPUT
@@ -921,25 +769,12 @@ int tami_scan(int argc, char *argv[]) {
   tam_file = tam_open(tam_path, "rb");
   tam_header_read(tam_header,tam_file);
   while(tam_record_read(tam_record,tam_file)) {
+    int DP = target_coverage[tam_record->target_id][tam_record->pos];
     int AC = 0;
-    int DP = 0;
-    int max_alt_kmer_value = 0;
-    uint64_t max_alt_kmer = 0;
-    for(int i = 0; i < tam_record->n_ref_kmers; i++) {
-      k = kh_get(kmers, h_k, tam_record->ref_kmers[i]);
-      if(k != kh_end(h_k)) {
-        DP += kh_val(h_k, k);
-      }
-    }
-    for(int i = 0; i < tam_record->n_alt_kmers; i++) {
-      k   = kh_get(kmers, h_k, tam_record->alt_kmers[i]);
-      if(k != kh_end(h_k)) {
-        AC += kh_val(h_k, k);
-        if(kh_val(h_k, k) > max_alt_kmer_value) {
-          max_alt_kmer_value = kh_val(h_k, k);
-          max_alt_kmer = tam_record->alt_kmers[i];
-        }
-      }
+    k = kh_get(kmers_count, h_k, tam_record->alt_kmers[0]);
+    if(k != kh_end(h_k)) {
+      kmer_count_t *kc = (kmer_count_t*)kh_value(h_k, k);
+      AC = kc->count;
     }
 
     if(AC < min_alternate_count)
@@ -954,42 +789,60 @@ int tami_scan(int argc, char *argv[]) {
 
     // Compute genotypes see LAVA paper (Shajii & al 2016)
     char GT[4] = "0/0";
-    double p_error = 0.01;
-    long long combi_a = combi(DP, DP - AC);
-    long long combi_b = combi(DP, AC);
-    double p_C_g0 = (double) combi_a * pow(1 - p_error, DP - AC) * pow(p_error, AC);
-    double p_C_g1 = (double) combi_a * 1/pow(2, DP);
-    double p_C_g2 = (double) combi_b * pow(p_error, DP - AC) * pow(1 - p_error, AC);
-    double p_C    = p_C_g0 + p_C_g1 + p_C_g2;
+    // double p_error = 0.01;
+    // long long combi_a = combi(DP, DP - AC);
+    // long long combi_b = combi(DP, AC);
+    //
+    // double p_C_g0 = (double) combi_a * pow(1 - p_error, DP - AC) * pow(p_error, AC);
+    // double p_C_g1 = (double) combi_a * 1/pow(2, DP);
+    // double p_C_g2 = (double) combi_b * pow(p_error, DP - AC) * pow(1 - p_error, AC);
+
     double p_g0   = pow((double) (DP - AC) / DP, 2);
     double p_g2   = pow((double) AC / DP, 2);
     double p_g1   = 1 - p_g0 - p_g2;
-    double p_g0_C = p_g0 * p_C_g0 / p_C;
-    double p_g1_C = p_g1 * p_C_g1 / p_C;
-    double p_g2_C = p_g2 * p_C_g2 / p_C;
+
+    // double p_C    = p_C_g0 * p_g0 + p_C_g1 * p_g1 + p_C_g2 * p_g2;
+
+    // double p_g0_C = p_g0 * p_C_g0 / p_C;
+    // double p_g1_C = p_g1 * p_C_g1 / p_C;
+    // double p_g2_C = p_g2 * p_C_g2 / p_C;
     // double scaling_term = pow(mean_coverage, DP) / factorial(DP) * negative_mean_coverage_exp;
     // double score, p;
 
-    if(p_g1_C > p_g0_C && p_g1_C > p_g2_C) {
+    //fprintf(stderr, "p_C: %f, p-G0: %f, p-G1: %f, p-G2: %f\n", p_C, p_g0_C, p_g1_C, p_g2_C);
+
+    // if(p_g1_C > p_g0_C && p_g1_C > p_g2_C) {
+    //   strcpy(GT,"0/1");
+    //   // p = p_g1_C;
+    // } else if(p_g2_C > p_g0_C && p_g2_C > p_g1_C) {
+    //   strcpy(GT,"1/1");
+    //   // p = p_g2_C;
+    // } else {
+    //   // p = p_g0_C;
+    // }
+
+    if(p_g1 > p_g0 && p_g1 > p_g2) {
       strcpy(GT,"0/1");
-      // p = p_g1_C;
-    } else if(p_g2_C > p_g0_C && p_g2_C > p_g1_C) {
+    } else if(p_g2 > p_g0 && p_g2 > p_g1) {
       strcpy(GT,"1/1");
-      // p = p_g2_C;
-    } else {
-      // p = p_g0_C;
     }
 
     // score = p * scaling_term;
     // FIXME RO is not computed right, because of the DP cumultate count for ref and other alterate alleles...
-    int_to_dna(max_alt_kmer,k_length,kmer);
-    fprintf(stdout, "%s\t%d\t%s\t%s\t%s\t.\tPASS\tDP=%d;AF=%.2f\tGT:RO:AO\t%s:%d:%d\n", tam_header->ref[tam_record->ref_id], tam_record->pos + 1, kmer, tam_record->ref_seq, tam_record->alt_seq, DP, AF, GT, DP - AC, AC);
+    int_to_dna(tam_record->alt_kmers[tam_record->n_alt_kmers/2],k_length,kmer);
+    char ref_seq[tam_record->ref_seq_l + 1];
+    strncpy(ref_seq, &tam_header->target[tam_record->target_id]->seq[tam_record->pos], tam_record->ref_seq_l);
+    ref_seq[tam_record->ref_seq_l] = '\0';
+    fprintf(stdout, "%s\t%d\t%s\t%s\t%s\t.\tPASS\tDP=%d;AF=%.2f\tGT:RO:AO\t%s:%d:%d\n", tam_header->ref[tam_header->target[tam_record->target_id]->ref_id], tam_header->target[tam_record->target_id]->pos + tam_record->pos + 1, kmer, ref_seq, tam_record->alt_seq, DP, AF, GT, DP - AC, AC);
 
   }
   gzclose(tam_file);
 
   tam_header_destroy(tam_header);
   tam_record_destroy(tam_record);
+  for(int i = 0; i < tam_header->n_target; i++)
+    free(target_coverage[i]);
+  free(target_coverage);
   return 0;
 }
 
@@ -1008,8 +861,14 @@ int tami_view(int argc, char *argv[]) {
   gzFile  tam_file = tam_open(tam_path, "rb");
 
   tam_header_read(tam_header,tam_file);
+
   kmer = malloc(tam_header->k + 1);
   kmer[tam_header->k] = '\0';
+
+  fprintf(stdout, "K = %d\n", tam_header->k);
+  for(int i = 0; i < tam_header->n_target; i++) {
+    tam_target_print(stdout,tam_header,tam_header->target[i]);
+  }
 
   while(tam_record_read(tam_record,tam_file)) {
     tam_record_print(stdout, tam_header, tam_record);
@@ -1040,7 +899,6 @@ int main(int argc, char *argv[])
 {
 	if (argc == 1) return usage();
 	if (strcmp(argv[1], "build") == 0) tami_build(argc-1, argv+1);
-  else if (strcmp(argv[1], "vcf-build") == 0) tami_vcfbuild(argc-1, argv+1);
 	else if (strcmp(argv[1], "scan") == 0) tami_scan(argc-1, argv+1);
   else if (strcmp(argv[1], "view") == 0) tami_view(argc-1, argv+1);
 	else {

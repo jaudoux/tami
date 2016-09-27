@@ -47,7 +47,7 @@ interval_array_t *interval_array_init() {
 }
 
 void interval_array_destroy(interval_array_t *a) {
-  for(int i = 1; i < kv_size(*a); i++)
+  for(int i = 0; i < kv_size(*a); i++)
     interval_destroy(kv_A(*a,i));
   kv_destroy(*a);
 }

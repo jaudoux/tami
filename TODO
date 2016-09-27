@@ -1,23 +1,68 @@
-- [x] Reduce memory footprint
+# DONE
+- [x] Reduce memory footprint
+- [x] support multi-sample VCF (VCF version 4.0)
+- [x] Create a sub-command to create a mutated k-mer dictionnary (tami build) and an other to use the dictionnary
+      on experimental data (tami scan). (some kind of "index" strategy)
+- [x] Create a standard gzipped binary file format to store the kmer dictionnary, this will include
+  - a magic number (char[4]) : 54 61 4d 46 (TaMF: Targeted Mutation Format)
+  - a header with
+      - format version number, uint32_t
+      - k-mer length, uint32_t
+      - number of disctinct k-mers : uint64_t
+        (including mutated k-mers, the reference k-mers and alternate k-mers (to allocate the hash))
+      - reference chromosomes : nb_references (uint32) + [uint32_t + [char]]
+  -  mutated k-mer records with  :
+      - the chr (uint32_t)
+      - the pos (uint32_t)
+      - the ref (uint32_t + [char])
+      - the alt (uint32_t + [char])
+      - nb_reference_kmers (uint32_t)
+      - nb_mutated_kmers (uint32_t)
+      - reference k-mers : [uint64_t]
+      - mutated k-mers   : [uint64_t]
+- [x] Optimize the k-mer int encoding by only shift the new necleotide instead of computing each time
+     the next k-mer from scratch
+- [x] Create a subcommand 'vcf-build' to create a TAM file of known mutations from a VCF file
+- [x] Support single nucleotides indels in 'tami build'
+- [x] Compute the genotypes using LAVA mathematics
+- [x] Remove entries that have the same reference k-mer but different positions ...
+- [x] Add a parameter in "tami build" to use a given ratio of all possible mutated k-mer o
+      verlapping a mutation instead of just one. This ratio should be 0.1 by default.
+- [x] Add an option to index overlapping k-mer given some sampling rate. Tami scan need to be
+      modified to support overlapping k-mers to avoid a given read counting multiple time for
+      the same mutation.
+
+# TODO
+- [ ] Do not use read's k-mers with low quality
+- [ ] Add an option to add some padding to the input intervals
+      This paddin should only apply to the reference sequence and reference k-mers. Mutated k-mer
+      should be contained within the original interval
+
+- [ ] Add a parameter in "tami build" to authorize longer deletions
+- [ ] Add an option to retrieve reads that have matched in "tami scan". The user only need to specify, the prefix
+      because we need to handle paired-end reads.
+- [ ] Multi-thread "tami scan" command.
+- [ ] Create a subcommand 'stats' that parses a TAM file and report infomation about it
+- [ ] Create a subcommand 'merge' that merge TAM files
+- [ ] Add special treatment for removing k-mers also present in the reference when sensitive
+      option is activated. We should check if there is a one-base substitution that could be better
+      than a two-base substitution. THIS IS REALLY COMPUTATIONALLY INTENSIVE, NOT SURE IF THIS
+      IS A GOOD DIRECTION TO TAKE...
+- [ ] retrieve variants from ensembl to create the alternate k-mers with known variants instead
+      of all possible variants...
+- [ ] Find a way to automatically set the -F -C -m parameters from the experimental data
+      we could use the mutated k-mers histogram and find a ways to optimize these parameters given
+      the mutation rate we could expect (ie: mut_rate < 0.01% ).
+- [ ] Create a programm (or some kind of sub-command) to help the user to create his bed file
+      by connecting to Ensembl API using a gene name
 - [ ] support gene list as input
 - [ ] add an option to only index exonic sequences (and splice sites) instead of the whole genomic sequence
 - [ ] Support multi-sample analysis (check multiple fasta at the same time)
-- [x] support multi-sample VCF (VCF version 4.0)
 - [ ] Connect to Ensembl REST API (or variant.info) to annote the variants. (this could be another command...)
 - [ ] and RNA mode to index transcript sequence and not genomic sequence
-- [ ] add an option to request larger sequence than the one specified in the bed file to avoid
-  problem with amplicon sequencing
-- [ ] retrieve variants from ensembl to create the alternate k-mers with known variants instead
-  of all possible variants...
-- [ ] Find a way to automatically set the -F -C -m parameters from the experimental data
-  we could use the mutated k-mers histogram and find a ways to optimize these parameters given
-  the mutation rate we could expect (ie: mut_rate < 0.01% ).
-- [ ] Create a programm (or some kind of sub-command) to help the user to create his bed file
-  by connecting to Ensembl API using a gene name
-- [ ] Reference k-mers should also have alternate k-mers? or not?
-- [x] Create a sub-command to create a mutated k-mer dictionnary (tami build) and an other to use the dictionnary
-  on experimental data (tami scan). (some kind of "index" strategy)
-- [x] Create a standard gzipped binary file format to store the kmer dictionnary, this will include
+
+# REFLEXION
+- NEW TAM FORMAT
   - a magic number (char[4]) : 54 61 4d 46 (TaMF: Targeted Mutation Format)
   - a header with
     - format version number, uint32_t
@@ -25,30 +70,59 @@
     - number of disctinct k-mers : uint64_t
       (including mutated k-mers, the reference k-mers and alternate k-mers (to allocate the hash))
     - reference chromosomes : nb_references (uint32) + [uint32_t + [char]]
+    - number of target sequences: uint32_t
+    - target_sequences (sorted by chr and pos, like mutated records) with :
+      - the chr id (uint32_t)
+      - the start pos (uint32_t)
+      - the length (uint32_t)
+      - The sequence (char * length) (we could do some 2bit encoding...)
+      - bit array of length (target_length - k_length + 1) with unique the bit set for retained ref_kmers
+
   - mutated k-mer records with  :
-    - the chr (uint32_t)
-    - the pos (uint32_t)
-    - the ref (uint32_t + [char])
-    - the alt (uint32_t + [char])
-    - nb_reference_kmers (uint32_t)
-    - nb_mutated_kmers (uint32_t)
-    - reference k-mers : [uint64_t]
+    - the target_sequence id (uint24_t)
+    - the ref length (uint8_t) (sequence is retrieved from the target sequence)
+    - the target-based pos (uint32_t)
+    - the alt (uint8_t + [char])
+    - nb_mutated_kmers (uint16_t)
     - mutated k-mers   : [uint64_t]
-- [ ] Multi-thread "tami scan" command.
-- [x] Optimize the k-mer int encoding by only shift the new necleotide instead of computing each time
-  the next k-mer from scratch
-- [ ] Create a subcommand 'stats' that parses a TAM file and report infomation about it
-- [ ] Create a subcommand 'merge' that merge TAM files
-- [x] Create a subcommand 'vcf-build' to create a TAM file of known mutations from a VCF file
-- [x] Support single nucleotides indels in 'tami build'
-- [ ] Add special treatment for removing k-mers also present in the reference when sensitive
-      option is activated. We should check if there is a one-base substitution that could be better
-      than a two-base substitution. THIS IS REALLY COMPUTATIONALLY INTENSIVE, NOT SURE IF THIS
-      IS A GOOD DIRECTION TO TAKE...
-- [ ] Add a parameter in "tami build" to authorize longer deletions
-- [ ] Add a parameter in "tami build" to use a given ratio of all possible mutated k-mer o
-      verlapping a mutation instead of just one. This ratio should be 0.1 by default.
-- [x] Compute the genotypes using LAVA mathematics
-- [ ] Add an option to retrieve reads that have matched in "tami scan". The user only need to specify, the prefix
-      because we need to handle paired-end reads.
-- [x] Remove entries that have the same reference k-mer but different positions ...
+    # If we whant to allow double mutated k-mers
+    - nb_alt_kmers (uint16_t)
+    - alt_kmers : [uint64_t]
+
+Algorithm of tami-build :
+
+
+Algorithm of tami-scan :
+
+1. Load ref_kmers and alt_kmers into the hash
+   The hash value is a struct with { count => uint31_t, type => '1bit', pos => uint32_t }
+2. Scan the reads and for each k-mers look into the hash :
+   We could do something smarter, like "A call is validated only if a ref_kmer is matched in the same read
+   in the same genomic neihborhood"
+   if we have a match :
+      if the type is 'ALT_KMER'
+          if prev_alt_kmer_pos is equal to the match[pos]
+            next;
+          else
+            match[count]++;
+            prev_alt_kmer_pos = match[pos]
+          fi
+      else if abs(prev_ref_kmer_pos - match[pos]) <= k_length
+          next;
+      else
+        match[count]++;
+        prev_ref_kmer_pos = match[pos]
+      fi
+    fi
+3. Load target sequences into memory and create for each target an array of their length
+4. Loop over each k-mer of each target and comptute per-base depth as:
+   for i in target_length do
+    depth = 0;
+    for j in max(0, i - k_length)..i do
+      k_int = kmer_to_int(target,i,k);
+      depth += kmers_count[k_int][count];
+    efor
+    target_DP[i] = depth;
+   efor
+5. Loop over each mutations and update the read depth
+6. Loop over each mutation and do the classic stuff to print VCF records
