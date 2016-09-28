@@ -680,7 +680,7 @@ int tami_scan(int argc, char *argv[]) {
     fp = gzopen(fastq_file, "r");
     seq = kseq_init(fp);
     while ((l = kseq_read(seq)) >= 0) {
-      uint64_t prev_target_id = UINT64_MAX, prev_pos = UINT64_MAX;
+      uint32_t prev_target_id = UINT32_MAX, prev_pos = UINT32_MAX;
       uint32_t prev_is_reference_kmer = 0;
       nb_reads++;
       if(seq->seq.l >= k_length) {
@@ -697,7 +697,7 @@ int tami_scan(int argc, char *argv[]) {
             // if a reference_kmer for mapping to the same loci is found in the read
             if(kc->is_reference_kmer) {
               // Only update the k_mer if the previous matched one was further that k
-              if(!prev_is_reference_kmer || (prev_is_reference_kmer && (prev_target_id != kc->target_id || kc->pos - prev_pos >= k_length))) {
+              if(!prev_is_reference_kmer || (prev_is_reference_kmer && (prev_target_id != kc->target_id || abs(kc->pos - prev_pos) >= k_length))) {
                 kc->count++;
                 prev_is_reference_kmer = 1;
                 prev_target_id         = kc->target_id;
@@ -729,12 +729,14 @@ int tami_scan(int argc, char *argv[]) {
     target_coverage[i] = calloc(t->length,sizeof(uint32_t));
     uint64_t f_k, r_k;
     for(int j = 0; j < t->length - tam_header->k + 1; j++) {
-      uint64_t kmer_int = canonical_kmer(&t->seq[j], tam_header->k, &f_k, &r_k);
-      k = kh_get(kmers_count, h_k, kmer_int);
-      if(k != kh_end(h_k)) {
-        kmer_count_t *kc = (kmer_count_t*)kh_value(h_k, k);
-        for(int n = 0; n < tam_header->k; n++) {
-          target_coverage[i][j+n] += kc->count;
+      if((t->ref_kmers_bv[j / 8] >> j % 8) & 1) {
+        uint64_t kmer_int = canonical_kmer(&t->seq[j], tam_header->k, &f_k, &r_k);
+        k = kh_get(kmers_count, h_k, kmer_int);
+        if(k != kh_end(h_k)) {
+          kmer_count_t *kc = (kmer_count_t*)kh_value(h_k, k);
+          for(int n = 0; n < tam_header->k; n++) {
+            target_coverage[i][j+n] += kc->count;
+          }
         }
       }
     }
