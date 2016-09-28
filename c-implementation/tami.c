@@ -136,16 +136,18 @@ int load_kmers(char *tam_path, kmers_count_hash_t *kch) {
     for(int i = 0; i < h->n_target; i++) {
       tam_target_t *t = h->target[i];
       for(int j = 0; j < t->length - h->k + 1; j++) {
-        uint64_t f_k, r_k;
-        uint64_t kmer_int = canonical_kmer(&t->seq[j],h->k,&f_k,&r_k);
-        k = kh_get(kmers_count, kch, kmer_int);
-        if(k == kh_end(kch)) {
-          kmer_count_t *kc = (kmer_count_t*)calloc(1, sizeof(kmer_count_t));
-          kc->is_reference_kmer = 1;
-          kc->target_id         = i;
-          kc->pos               = j;
-          k = kh_put(kmers_count, kch, kmer_int, &ret);
-          kh_value(kch, k) = kc;
+        if((t->ref_kmers_bv[j / 8] >> j % 8) & 1) {
+          uint64_t f_k, r_k;
+          uint64_t kmer_int = canonical_kmer(&t->seq[j],h->k,&f_k,&r_k);
+          k = kh_get(kmers_count, kch, kmer_int);
+          if(k == kh_end(kch)) {
+            kmer_count_t *kc = (kmer_count_t*)calloc(1, sizeof(kmer_count_t));
+            kc->is_reference_kmer = 1;
+            kc->target_id         = i;
+            kc->pos               = j;
+            k = kh_put(kmers_count, kch, kmer_int, &ret);
+            kh_value(kch, k) = kc;
+          }
         }
       }
     }
@@ -405,60 +407,6 @@ int tami_build(int argc, char *argv[]) {
 
     // Loop over all positions in the sequences
     for (int n = 0; n < t->length; n++) {
-      ref_nuc = t->seq[n];
-
-      // Handle 1-nt substitutions
-      tam_record->pos           = n;
-      tam_record->ref_seq_l = 1;
-      tam_record->alt_seq_l = 1;
-
-      for(int p = 0; p < NB_NUCLEOTIDES; p++) {
-        if(NUCLEOTIDES[p] != ref_nuc) {
-          strncpy(tam_record->alt_seq, &NUCLEOTIDES[p], 1);
-          tam_record->alt_seq[1] = '\0';
-          tam_record->n_alt_kmers = 0;
-
-          // Loop over all overlapping k-mers given the sampling rate
-          for (int j = 0; j <= k_length; j += k_jump) {
-
-            // Set the mut_pos to the last nucleotide of the k_mer if j is larger
-            // than k_length. This happens for the last k-mer when k is even
-            if(j == k_length) {
-              ref_kmer_pos = n - k_length + 1;
-              mut_pos      = k_length - 1;
-            } else {
-              ref_kmer_pos  = n - j;
-              mut_pos       = j;
-            }
-
-            // The k-mer is not completely included in the reference sequence
-            if(ref_kmer_pos >= 0 && ref_kmer_pos + k_length <= t->length) {
-              ref_kmer                    = ref_kmers[ref_kmer_pos];
-              forward_ref_kmer            = forward_ref_kmers[ref_kmer_pos];
-
-              // Mut the ref k-mer
-              mut_kmer = mut_int_dna(forward_ref_kmer, k_length, mut_pos, NUCLEOTIDES[p]);
-              reverse_mut_kmer = int_revcomp(mut_kmer, k_length);
-              if(reverse_mut_kmer < mut_kmer)
-                mut_kmer = reverse_mut_kmer;
-
-              // Add the mut k-mer if it is not already in the hash
-              k = kh_get(kmers, h_k, mut_kmer);
-              if(k == kh_end(h_k)) {
-                k = kh_put(kmers, h_k, mut_kmer, &ret);
-                kh_value(h_k, k) = MUTATED_KMER;
-                tam_record->alt_kmers[tam_record->n_alt_kmers++]  = mut_kmer;
-              } else {
-                kh_del(kmers, h_k, k);
-              }
-            }
-          }
-          // Print the record in the tam file if it has at least one ref and
-          // on alt k-mer
-          if(tam_record->n_alt_kmers > 0)
-            tam_record_write(tam_record, tam_file);
-        }
-      }
 
       // Set ref_kmer_pos and mut_pos for indels
       if(n >= k_middle) {
@@ -521,6 +469,61 @@ int tami_build(int argc, char *argv[]) {
               tam_record_write(tam_record, tam_file);
             }
           }
+        }
+      }
+
+      ref_nuc = t->seq[n];
+
+      // Handle 1-nt substitutions
+      tam_record->pos       = n;
+      tam_record->ref_seq_l = 1;
+      tam_record->alt_seq_l = 1;
+
+      for(int p = 0; p < NB_NUCLEOTIDES; p++) {
+        if(NUCLEOTIDES[p] != ref_nuc) {
+          strncpy(tam_record->alt_seq, &NUCLEOTIDES[p], 1);
+          tam_record->alt_seq[1] = '\0';
+          tam_record->n_alt_kmers = 0;
+
+          // Loop over all overlapping k-mers given the sampling rate
+          for (int j = 0; j <= k_length; j += k_jump) {
+
+            // Set the mut_pos to the last nucleotide of the k_mer if j is larger
+            // than k_length. This happens for the last k-mer when k is even
+            if(j == k_length) {
+              ref_kmer_pos = n - k_length + 1;
+              mut_pos      = k_length - 1;
+            } else {
+              ref_kmer_pos  = n - j;
+              mut_pos       = j;
+            }
+
+            // The k-mer is not completely included in the reference sequence
+            if(ref_kmer_pos >= 0 && ref_kmer_pos + k_length <= t->length) {
+              ref_kmer                    = ref_kmers[ref_kmer_pos];
+              forward_ref_kmer            = forward_ref_kmers[ref_kmer_pos];
+
+              // Mut the ref k-mer
+              mut_kmer = mut_int_dna(forward_ref_kmer, k_length, mut_pos, NUCLEOTIDES[p]);
+              reverse_mut_kmer = int_revcomp(mut_kmer, k_length);
+              if(reverse_mut_kmer < mut_kmer)
+                mut_kmer = reverse_mut_kmer;
+
+              // Add the mut k-mer if it is not already in the hash
+              k = kh_get(kmers, h_k, mut_kmer);
+              if(k == kh_end(h_k)) {
+                k = kh_put(kmers, h_k, mut_kmer, &ret);
+                kh_value(h_k, k) = MUTATED_KMER;
+                tam_record->alt_kmers[tam_record->n_alt_kmers++]  = mut_kmer;
+              } else {
+                kh_del(kmers, h_k, k);
+              }
+            }
+          }
+          // Print the record in the tam file if it has at least one ref and
+          // on alt k-mer
+          if(tam_record->n_alt_kmers > 0)
+            tam_record_write(tam_record, tam_file);
         }
       }
     }
