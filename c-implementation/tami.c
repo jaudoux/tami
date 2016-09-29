@@ -21,6 +21,7 @@
 #define NB_THREAD_API 10
 #define DEFAULT_OUTPUT_NAME "kmers.tam"
 #define DEFAULT_K_LENGTH 32
+#define PSEUDO_MAPPING_MAX_DIST 100
 
 #define REFERENCE_KMER_CHECKED 0
 #define REFERENCE_KMER 1
@@ -691,8 +692,8 @@ int tami_scan(int argc, char *argv[]) {
     fp = gzopen(fastq_file, "r");
     seq = kseq_init(fp);
     while ((l = kseq_read(seq)) >= 0) {
-      uint32_t prev_target_id = UINT32_MAX, prev_pos = UINT32_MAX;
-      uint32_t prev_is_reference_kmer = 0;
+      kmer_count_t *prev_kc = NULL;
+      int prev_kc_updated = 0;
       nb_reads++;
       if(seq->seq.l >= k_length) {
         for(int i = 0; i < seq->seq.l - k_length + 1; i++) {
@@ -704,22 +705,32 @@ int tami_scan(int argc, char *argv[]) {
           k = kh_get(kmers_count, h_k, kmer_int);
           if(k != kh_end(h_k)) {
             kmer_count_t *kc = (kmer_count_t*)kh_value(h_k, k);
-            // TODO we could add some "pseudo-mapping" procedure to only count mutated k-mers
-            // if a reference_kmer for mapping to the same loci is found in the read
             if(kc->is_reference_kmer) {
-              // Only update the k_mer if the previous matched one was further that k
-              if(!prev_is_reference_kmer || (prev_is_reference_kmer && (prev_target_id != kc->target_id || abs(kc->pos - prev_pos) >= k_length))) {
+              // If the previous k-mer was not a ref k-mer, we update the ref k-mer
+              // and also update the previous k-mer if it match with the current k-mer coordinates
+              if(!prev_kc || !prev_kc->is_reference_kmer) {
+                // Update previous mutated k-mer that match this current ref-kmer
+                if(prev_kc && !prev_kc_updated && prev_kc->target_id == kc->target_id && abs(kc->pos - prev_kc->pos) <= PSEUDO_MAPPING_MAX_DIST) {
+                  prev_kc->count++;
+                  prev_kc_updated = 0;
+                }
                 kc->count++;
-                prev_is_reference_kmer = 1;
-                prev_target_id         = kc->target_id;
-                prev_pos               = kc->pos;
+                prev_kc = kc;
+              // Only update the k-mer if the previous ref k-mer is on a different target or is further
+              // than k
+              } else if(prev_kc->target_id != kc->target_id || abs(kc->pos - prev_kc->pos) >= k_length) {
+                kc->count++;
+                prev_kc = kc;
               }
-              // Only update the k-mer if the previous matched one was not the same mutation
-            } else if(prev_target_id != kc->target_id || kc->pos != prev_pos) {
-              kc->count++;
-              prev_is_reference_kmer = 0;
-              prev_target_id         = kc->target_id;
-              prev_pos               = kc->pos;
+            // Only update the k-mer if the previous matched one was not the same mutation
+            } else if(!prev_kc || prev_kc->target_id != kc->target_id || kc->pos != prev_kc->pos) {
+              if(prev_kc && prev_kc->is_reference_kmer && prev_kc->target_id == kc->target_id && abs(kc->pos - prev_kc->pos) <= PSEUDO_MAPPING_MAX_DIST) {
+                kc->count++;
+                prev_kc_updated = 1;
+              } else {
+                prev_kc_updated = 0;
+              }
+              prev_kc = kc;
             }
           }
         }
