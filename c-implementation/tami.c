@@ -710,9 +710,9 @@ int tami_scan(int argc, char *argv[]) {
               // and also update the previous k-mer if it match with the current k-mer coordinates
               if(!prev_kc || !prev_kc->is_reference_kmer) {
                 // Update previous mutated k-mer that match this current ref-kmer
-                if(prev_kc && !prev_kc_updated && prev_kc->target_id == kc->target_id && abs(kc->pos - prev_kc->pos) <= PSEUDO_MAPPING_MAX_DIST) {
+                if(prev_kc && !prev_kc->is_reference_kmer && !prev_kc_updated && prev_kc->target_id == kc->target_id && abs(kc->pos - prev_kc->pos) <= PSEUDO_MAPPING_MAX_DIST) {
                   prev_kc->count++;
-                  prev_kc_updated = 0;
+                  prev_kc_updated = 1;
                 }
                 kc->count++;
                 prev_kc = kc;
