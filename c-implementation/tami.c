@@ -154,17 +154,28 @@ int load_kmers(char *tam_path, kmers_count_hash_t *kch) {
 
     // Load mutated k-mers
     while(tam_record_read(r,tam_file)) {
-      // FIXME We should do something better than this, because we could know the exact
-      // Position of the k_mer in the genome
-      kmer_count_t *kc = (kmer_count_t*)calloc(1, sizeof(kmer_count_t));
-      kc->is_reference_kmer = 0;
-      kc->target_id         = r->target_id;
-      kc->pos               = r->pos;
-      for(int i = 0; i < r->n_alt_kmers; i++) {
-        k = kh_put(kmers_count, kch, r->alt_kmers[i], &ret);
-        kh_value(kch, k) = kc;
+      // First check if the mutated k-mers overlaps unique reference k-mers
+      int found_ref_kmer = 0, i = 0, j = 0;
+      tam_target_t *t = h->target[r->target_id];
+      while(!found_ref_kmer && i < h->k) {
+        j = r->pos - i;
+        // If the k-mer ref bit is up, we have at least one overlapping ref-kmer
+        if(j >= 0 && (t->ref_kmers_bv[j / 8] >> j % 8) & 1) {
+          found_ref_kmer = 1;
+          // FIXME We should do something better than this, because we could know the exact
+          // Position of the k_mer in the genome
+          kmer_count_t *kc = (kmer_count_t*)calloc(1, sizeof(kmer_count_t));
+          kc->is_reference_kmer = 0;
+          kc->target_id         = r->target_id;
+          kc->pos               = r->pos;
+          for(int i = 0; i < r->n_alt_kmers; i++) {
+            k = kh_put(kmers_count, kch, r->alt_kmers[i], &ret);
+            kh_value(kch, k) = kc;
+          }
+          mut_id++;
+        }
+        i++;
       }
-      mut_id++;
     }
   }
   tam_header_destroy(h);
