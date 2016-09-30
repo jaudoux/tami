@@ -915,7 +915,7 @@ static int usage()
 	fprintf(stderr, "Usage:   tami <command> <arguments>\n");
 	fprintf(stderr, "Version: %s\n\n", TAMI_VERSION);
 	fprintf(stderr, "Command: build      Create a mutated k-mer lib from genomic intervals\n");
-  fprintf(stderr, "         vcf-build  Create a mutated k-mer lib from known mutation\n");
+  //fprintf(stderr, "         vcf-build  Create a mutated k-mer lib from known mutation\n");
 	fprintf(stderr, "         scan       Scan a FASTQ files agains a TAM file\n");
   fprintf(stderr, "         view       Display text version of TAM files\n");
 	fprintf(stderr, "\n");
