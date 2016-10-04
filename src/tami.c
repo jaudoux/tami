@@ -41,6 +41,8 @@ typedef struct {
   uint32_t pos;
 } kmer_count_t;
 
+typedef kvec_t(kmer_count_t*) kmer_count_array_t;
+
 KHASH_MAP_INIT_INT64(kmers_count, kmer_count_t*)
 typedef khash_t(kmers_count) kmers_count_hash_t;
 
@@ -105,7 +107,7 @@ int remove_reference_kmers(char *reference_fasta, kmers_hash_t *h, int k_length)
           if(kh_value(h, k) == REFERENCE_KMER) {
             // If a reference k-mer is seen more than once, it will be deleted
             kh_value(h, k) = REFERENCE_KMER_CHECKED;
-          } else {
+          } else if (kh_value(h, k) == REFERENCE_KMER_CHECKED) {
             kh_del(kmers, h, k);
             nb_removed_kmers++;
           }
@@ -252,10 +254,11 @@ int tami_build(int argc, char *argv[]) {
   int debug = 0;
 
   int c;
-  while ((c = getopt(argc, argv, "disk:r:o:n:")) >= 0) {
+  while ((c = getopt(argc, argv, "disk:r:o:n:p:")) >= 0) {
 		switch (c) {
       case 'k': k_length = atoi(optarg); break;
       case 'r': reference_fasta = optarg; break;
+      case 'p': target_padding  = atoi(optarg); break;
       // case 's': use_derived_kmers = 1; break;
       case 'o': output_file = optarg; break;
       case 'n': kmer_sampling = atoi(optarg); break;
@@ -318,8 +321,14 @@ int tami_build(int argc, char *argv[]) {
   fprintf(stderr, "Reading BED file...\n");
   load_intervals_from_bed(bed_file, interval_array);
 
+  // Get reference names and set padding
   for(int i = 0; i < kv_size(*interval_array); i++) {
     interval = kv_A(*interval_array,i);
+    if(interval->start - target_padding >= 0)
+      interval->start -= target_padding;
+    else
+      interval->start = 0;
+    interval->end   += target_padding;
     if(kh_get(references, h_r, interval->chr) == kh_end(h_r)) {
       char *chr_cpy = malloc(strlen(interval->chr) + 1);
       strcpy(chr_cpy,interval->chr);
@@ -394,8 +403,8 @@ int tami_build(int argc, char *argv[]) {
 
   tam_header_write(tam_header, tam_file);
 
-  tam_record->alt_kmers   = malloc(sizeof(uint64_t)*kmer_sampling);
-  tam_record->alt_seq     = malloc(k_length);
+  tam_record->alt_kmers   = calloc(kmer_sampling,sizeof(uint64_t));
+  tam_record->alt_seq     = calloc(k_length,sizeof(char));
 
   for(int i = 0; i < tam_header->n_target; i++) {
     tam_target_t *t = tam_header->target[i];
@@ -478,6 +487,7 @@ int tami_build(int argc, char *argv[]) {
               kh_value(h_k, k) = MUTATED_KMER;
               tam_record->alt_kmers[0]  = mut_kmer;
               strncpy(tam_record->alt_seq, &kmer[mut_pos - 1], 2);
+              tam_record->alt_seq[2] = '\0';
               tam_record_write(tam_record, tam_file);
             }
           }
@@ -493,7 +503,7 @@ int tami_build(int argc, char *argv[]) {
 
       for(int p = 0; p < NB_NUCLEOTIDES; p++) {
         if(NUCLEOTIDES[p] != ref_nuc) {
-          strncpy(tam_record->alt_seq, &NUCLEOTIDES[p], 1);
+          tam_record->alt_seq[0] = NUCLEOTIDES[p];
           tam_record->alt_seq[1] = '\0';
           tam_record->n_alt_kmers = 0;
 
@@ -614,18 +624,21 @@ int tami_build(int argc, char *argv[]) {
 int tami_scan(int argc, char *argv[]) {
   char *fastq_file, *tam_path;
   int debug = 0;
-  float min_alternate_fraction = 0.2;
-  int min_alternate_count = 3;
-  int min_coverage = 10;
-  int max_coverage = -1;
+  float min_alternate_fraction  = 0.2;
+  int min_alternate_count       = 3;
+  int min_coverage              = 10;
+  int max_coverage              = -1;
+  int min_quality               = 10;
+  int phread_padding            = 33;
 
   int c;
-  while ((c = getopt(argc, argv, "dF:C:m:M:")) >= 0) {
+  while ((c = getopt(argc, argv, "dF:C:m:M:Q:")) >= 0) {
     switch (c) {
       case 'F': min_alternate_fraction = atof(optarg); break;
       case 'C': min_alternate_count = atoi(optarg); break;
       case 'm': min_coverage = atoi(optarg); break;
       case 'M': max_coverage = atoi(optarg); break;
+      case 'Q': min_quality  = atoi(optarg); break;
       case 'd': debug = 1; break;
     }
   }
@@ -637,6 +650,7 @@ int tami_scan(int argc, char *argv[]) {
     fprintf(stderr, "         -C INT    min alternate allele count (min_value: 1)[%d]\n", min_alternate_count);
     fprintf(stderr, "         -m INT    min coverage [%d]\n", min_coverage);
     fprintf(stderr, "         -M INT    max coverage (min_value: 1)[%d]\n", max_coverage);
+    fprintf(stderr, "         -Q INT    min quality [%d]\n", min_quality);
     fprintf(stderr, "         -d        debug mode\n");
     fprintf(stderr, "\n");
     return 1;
@@ -688,49 +702,72 @@ int tami_scan(int argc, char *argv[]) {
     kseq_t *seq;
     int l;
     uint64_t kmer_int, f_k = 0, r_k = 0;
+    kmer_count_array_t *kc_a = (kmer_count_array_t*)calloc(1, sizeof(kmer_count_array_t));
+    kv_init(*kc_a);
     int nb_reads = 0;
     fp = gzopen(fastq_file, "r");
     seq = kseq_init(fp);
     while ((l = kseq_read(seq)) >= 0) {
-      kmer_count_t *prev_kc = NULL;
-      int prev_kc_updated = 0;
+      kmer_count_t *prev_kc = NULL, *ref_kc = NULL;
       nb_reads++;
+      int min_quality_pos  = -1;
       if(seq->seq.l >= k_length) {
         for(int i = 0; i < seq->seq.l - k_length + 1; i++) {
           if(i > 0) {
             kmer_int = next_canonical_kmer(k_length, seq->seq.s[i + k_length - 1], &f_k, &r_k);
+            // Update min quality (if needed)
           } else {
             kmer_int = canonical_kmer(seq->seq.s, k_length, &f_k, &r_k);
           }
-          k = kh_get(kmers_count, h_k, kmer_int);
-          if(k != kh_end(h_k)) {
-            kmer_count_t *kc = (kmer_count_t*)kh_value(h_k, k);
-            if(kc->is_reference_kmer) {
-              // If the previous k-mer was not a ref k-mer, we update the ref k-mer
-              // and also update the previous k-mer if it match with the current k-mer coordinates
-              if(!prev_kc || !prev_kc->is_reference_kmer) {
-                // Update previous mutated k-mer that match this current ref-kmer
-                if(prev_kc && !prev_kc->is_reference_kmer && !prev_kc_updated && prev_kc->target_id == kc->target_id && abs(kc->pos - prev_kc->pos) <= PSEUDO_MAPPING_MAX_DIST) {
-                  prev_kc->count++;
-                  prev_kc_updated = 1;
+          // Update min quality base
+          if(min_quality_pos < i) {
+            min_quality_pos = i;
+            for(int j = i + 1; j < i + k_length; j++) {
+              if(min_quality_pos == -1 || seq->qual.s[j] < seq->qual.s[min_quality_pos]) {
+                min_quality_pos = j;
+              }
+            }
+          } else if (seq->qual.s[i + k_length - 1] < seq->qual.s[min_quality_pos]) {
+            min_quality_pos = i + k_length - 1;
+          }
+          // Only test k-mer if quality is sufficient
+          //fprintf(stderr, "Quality: %c, Min Quality: %c, Min quality pos: %d, Min quality score: %d\n", seq->qual.s[i], seq->qual.s[min_quality_pos], min_quality_pos, seq->qual.s[min_quality_pos] - phread_padding);
+          if((seq->qual.s[min_quality_pos] - phread_padding) >= min_quality) {
+            k = kh_get(kmers_count, h_k, kmer_int);
+            if(k != kh_end(h_k)) {
+              kmer_count_t *kc = (kmer_count_t*)kh_value(h_k, k);
+              if(kc->is_reference_kmer) {
+                // If the previous k-mer was not a ref k-mer, we update the ref k-mer
+                // and also update the previous k-mer if it match with the current k-mer coordinates
+                if(!prev_kc || !prev_kc->is_reference_kmer) {
+                  // Update previous mutated k-mer that match this current ref-kmer
+                  for(int j = 0; j < kv_size(*kc_a); j++) {
+                    if(kc_a->a[j]->target_id == kc->target_id && abs(kc->pos - kc_a->a[j]->pos) <= PSEUDO_MAPPING_MAX_DIST) {
+                      kc_a->a[j]->count++;
+                    }
+                  }
+                  kc_a->n = 0;
+                  // Update k_mer count
+                  kc->count++;
+                  prev_kc = kc;
+                // Only update the k-mer if the previous ref k-mer is on a different target or is further
+                // than k
+                } else if(prev_kc->target_id != kc->target_id || abs(kc->pos - prev_kc->pos) >= k_length) {
+                  kc->count++;
+                  prev_kc = kc;
                 }
-                kc->count++;
-                prev_kc = kc;
-              // Only update the k-mer if the previous ref k-mer is on a different target or is further
-              // than k
-              } else if(prev_kc->target_id != kc->target_id || abs(kc->pos - prev_kc->pos) >= k_length) {
-                kc->count++;
+                ref_kc  = kc;
+              // Only update the k-mer if the previous matched one was not the same mutation
+              } else if(!prev_kc || prev_kc->target_id != kc->target_id || kc->pos != prev_kc->pos) {
+                if(ref_kc && ref_kc->target_id == kc->target_id && abs(kc->pos - ref_kc->pos) <= PSEUDO_MAPPING_MAX_DIST) {
+                  kc->count++;
+                  //prev_kc_updated = 1;
+                } else {
+                  kv_push(kmer_count_t*,*kc_a,kc);
+                  //prev_kc_updated = 0;
+                }
                 prev_kc = kc;
               }
-            // Only update the k-mer if the previous matched one was not the same mutation
-            } else if(!prev_kc || prev_kc->target_id != kc->target_id || kc->pos != prev_kc->pos) {
-              if(prev_kc && prev_kc->is_reference_kmer && prev_kc->target_id == kc->target_id && abs(kc->pos - prev_kc->pos) <= PSEUDO_MAPPING_MAX_DIST) {
-                kc->count++;
-                prev_kc_updated = 1;
-              } else {
-                prev_kc_updated = 0;
-              }
-              prev_kc = kc;
             }
           }
         }

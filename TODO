@@ -31,13 +31,13 @@
 - [x] Add an option to index overlapping k-mer given some sampling rate. Tami scan need to be
       modified to support overlapping k-mers to avoid a given read counting multiple time for
       the same mutation.
-
-# TODO
-- [ ] Do not use read's k-mers with low quality
-- [ ] Add an option to add some padding to the input intervals
-      This paddin should only apply to the reference sequence and reference k-mers. Mutated k-mer
+- [x] Do not use read's k-mers with low quality
+- [x] Add an option to add some padding to the input intervals
+      This padding should only apply to the reference sequence and reference k-mers. Mutated k-mer
       should be contained within the original interval
 
+# TODO
+- [ ] Add an option in tami scan to only retrieve variant overlapping regions in input bed
 - [ ] Add a parameter in "tami build" to authorize longer deletions
 - [ ] Add an option to retrieve reads that have matched in "tami scan". The user only need to specify, the prefix
       because we need to handle paired-end reads.
