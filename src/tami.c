@@ -801,17 +801,16 @@ int tami_scan(int argc, char *argv[]) {
     }
   }
 
-  // TODO add mutated k-mer to coverage !!
-  tam_file = tam_open(tam_path, "rb");
-  tam_header_read(tam_header,tam_file);
-  while(tam_record_read(tam_record,tam_file)) {
-    k = kh_get(kmers_count, h_k, tam_record->alt_kmers[0]);
-    if(k != kh_end(h_k)) {
-      kmer_count_t *kc = (kmer_count_t*)kh_value(h_k, k);
-      target_coverage[tam_record->target_id][tam_record->pos] += kc->count;
+  // Add mutated k-mer to coverage !!
+  for(k = kh_begin(h_k); k != kh_end(h_k); ++k) {
+    if(!kh_exist(h_k, k)) continue;
+    kmer_count_t *kc = (kmer_count_t*)kh_value(h_k, k);
+    if(!kc->is_reference_kmer) {
+      target_coverage[kc->target_id][kc->pos] += kc->count;
+      // Change its boolean to avoid picking it another time
+      kc->is_reference_kmer = 1;
     }
   }
-  gzclose(tam_file);
 
   /*****************************************************************************
   *                             PRINT OUTPUT
