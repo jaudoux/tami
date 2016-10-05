@@ -463,7 +463,7 @@ int tami_build(int argc, char *argv[]) {
           k = kh_put(kmers, h_k, mut_kmer, &ret);
           kh_value(h_k, k) = MUTATED_KMER;
           tam_record->alt_kmers[0]  = mut_kmer;
-          tam_record->alt_seq[0] = t->seq[ref_kmer_pos + mut_pos];
+          tam_record->alt_seq[0] = t->seq[ref_kmer_pos + mut_pos - 1];
           tam_record->alt_seq[1] = '\0';
           tam_record_write(tam_record, tam_file);
         }
