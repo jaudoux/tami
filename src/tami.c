@@ -107,7 +107,7 @@ int remove_reference_kmers(char *reference_fasta, kmers_hash_t *h, int k_length)
           if(kh_value(h, k) == REFERENCE_KMER) {
             // If a reference k-mer is seen more than once, it will be deleted
             kh_value(h, k) = REFERENCE_KMER_CHECKED;
-          } else if (kh_value(h, k) == REFERENCE_KMER_CHECKED) {
+          } else { //if (kh_value(h, k) == REFERENCE_KMER_CHECKED) {
             kh_del(kmers, h, k);
             nb_removed_kmers++;
           }
